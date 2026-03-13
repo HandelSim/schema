@@ -15,6 +15,7 @@ import projectsRouter from './routes/projects';
 import nodesRouter from './routes/nodes';
 import contractsRouter from './routes/contracts';
 import { broadcastGlobal, initSSE } from './utils/sse';
+import { getApiKey } from './utils/auth';
 
 const app = express();
 const API_PORT = parseInt(process.env.PORT_API || '3001', 10);
@@ -124,7 +125,13 @@ try {
 app.listen(API_PORT, '0.0.0.0', () => {
   console.log(`[API] Server running on http://0.0.0.0:${API_PORT}`);
   console.log(`[API] Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`[API] Anthropic API: ${process.env.ANTHROPIC_API_KEY ? 'configured' : 'NOT configured'}`);
+  const apiKey = getApiKey();
+  if (apiKey) {
+    const source = process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY env var' : 'Claude Code OAuth (~/.claude/.credentials.json)';
+    console.log(`[API] Anthropic auth: configured (${source})`);
+  } else {
+    console.warn('[API] Anthropic auth: NOT configured — set ANTHROPIC_API_KEY or run `claude auth login`');
+  }
 });
 
 // If in production, also serve frontend on its own port

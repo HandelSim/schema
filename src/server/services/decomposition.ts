@@ -9,10 +9,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db';
 import { broadcastGlobal, broadcastToNode } from '../utils/sse';
 import { getDefaultHooks } from '../utils/hooks-templates';
+import { getApiKeyOrThrow } from '../utils/auth';
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const getAnthropic = () => new Anthropic({ apiKey: getApiKeyOrThrow() });
 
 interface ComponentConfig {
   prompt: string;
@@ -216,7 +215,7 @@ export async function decomposeNode(nodeId: string): Promise<void> {
     broadcastToNode(nodeId, 'log', { message: 'Calling Claude API for decomposition...' });
 
     // Use Claude Sonnet 4 for high-quality architectural decomposition
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 8192,
       messages: [{ role: 'user', content: prompt }],

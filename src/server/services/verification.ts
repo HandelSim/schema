@@ -12,10 +12,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getDb } from '../db';
 import { broadcastGlobal, broadcastToNode } from '../utils/sse';
+import { getApiKeyOrThrow } from '../utils/auth';
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const getAnthropic = () => new Anthropic({ apiKey: getApiKeyOrThrow() });
 
 interface NodeRow {
   id: string;
@@ -124,7 +123,7 @@ export async function verifyNode(nodeId: string): Promise<VerificationResult> {
     const prompt = buildVerificationPrompt(node, children, contracts);
 
     // Use Claude Haiku for fast, cost-effective verification
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }],

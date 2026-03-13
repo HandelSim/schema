@@ -156,7 +156,11 @@ export async function executeNode(nodeId: string): Promise<void> {
         cwd: workspacePath,
         env: {
           ...process.env,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+          // Don't override ANTHROPIC_API_KEY — claude CLI uses its own stored
+          // OAuth credentials (~/.claude/.credentials.json) when not set.
+          ...(process.env.ANTHROPIC_API_KEY
+            ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+            : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
