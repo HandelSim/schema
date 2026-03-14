@@ -56,7 +56,7 @@ app.use('/api/projects', projectsRouter);
 app.use('/api/nodes', nodesRouter);
 app.use('/api/contracts', contractsRouter);
 
-// Health check endpoint (used by Docker healthcheck)
+// Health check endpoint
 app.get('/api/health', (_req, res) => {
   try {
     const db = getDb();
