@@ -180,6 +180,9 @@ function parseDecompositionResponse(content: string): DecompositionResult {
  * Updates node status, calls Claude API, creates child nodes and contracts.
  */
 export async function decomposeNode(nodeId: string): Promise<void> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is not set. Cannot run decomposition. Set this environment variable and restart the server.');
+  }
   const db = getDb();
 
   const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get(nodeId) as NodeRow | undefined;

@@ -124,7 +124,11 @@ try {
 app.listen(API_PORT, '0.0.0.0', () => {
   console.log(`[API] Server running on http://0.0.0.0:${API_PORT}`);
   console.log(`[API] Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`[API] Anthropic API: ${process.env.ANTHROPIC_API_KEY ? 'configured' : 'NOT configured'}`);
+  if (process.env.ANTHROPIC_API_KEY) {
+    console.log('[API] Anthropic API: configured ✓');
+  } else {
+    console.error('[API] ⚠️  WARNING: ANTHROPIC_API_KEY is NOT set. Node decomposition will fail until this is configured.');
+  }
 });
 
 // If in production, also serve frontend on its own port

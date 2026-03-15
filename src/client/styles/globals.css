@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* React Flow overrides for better integration with our design system */
+/* React Flow overrides */
 .react-flow__node {
   border-radius: 8px !important;
 }
@@ -10,19 +10,46 @@
 .react-flow__minimap {
   border-radius: 8px !important;
   overflow: hidden;
+  background: #111827 !important;
 }
 
 .react-flow__controls {
   border-radius: 8px !important;
   overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4) !important;
 }
 
 .react-flow__controls button {
   border-radius: 0 !important;
+  background: #1f2937 !important;
+  border-color: #374151 !important;
+  color: #9ca3af !important;
+  fill: #9ca3af !important;
 }
 
-/* Scrollbar styling for log panel */
+.react-flow__controls button:hover {
+  background: #374151 !important;
+}
+
+.react-flow__controls svg {
+  fill: #9ca3af !important;
+}
+
+/* Dark React Flow background and panel */
+.react-flow {
+  background: #0f172a !important;
+}
+
+.react-flow__panel {
+  color: #9ca3af;
+}
+
+/* Dark edges */
+.react-flow__edge-path {
+  stroke: #4b5563 !important;
+}
+
+/* Scrollbar styling */
 .overflow-y-auto::-webkit-scrollbar {
   width: 4px;
 }
@@ -51,7 +78,6 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scale for subtle hover effects */
 .hover\:scale-102:hover {
   transform: scale(1.02);
 }

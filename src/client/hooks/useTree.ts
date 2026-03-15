@@ -63,6 +63,12 @@ export function useTree(projectId: string | null): UseTreeReturn {
         loading: false,
         error: null,
       });
+      // Auto-select root node if there's exactly one pending node and nothing is selected yet
+      setSelectedNodeId(prev => {
+        if (prev) return prev;
+        const rootNode = data.nodes.find(n => !n.parent_id && n.status === 'pending');
+        return rootNode ? rootNode.id : null;
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load tree';
       setState(prev => ({ ...prev, loading: false, error: message }));
@@ -75,7 +81,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
 
   // Parse raw node data from API (JSON fields are strings in SQLite)
   const parseNode = (raw: Record<string, unknown>): TreeNode => ({
-    ...raw as TreeNode,
+    ...raw as unknown as TreeNode,
     hooks: typeof raw['hooks'] === 'string' ? JSON.parse(raw['hooks'] as string || 'null') : raw['hooks'],
     mcp_tools: typeof raw['mcp_tools'] === 'string' ? JSON.parse(raw['mcp_tools'] as string || '[]') : (raw['mcp_tools'] as TreeNode['mcp_tools'] || []),
     allowed_tools: typeof raw['allowed_tools'] === 'string' ? JSON.parse(raw['allowed_tools'] as string || '[]') : (raw['allowed_tools'] as string[] || []),

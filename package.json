@@ -28,6 +28,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "kingdom-raven": "git+https://HandelSim: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@github.com/HandelSim/kingdom-raven.git",
     "nats": "^2.29.3"
   }
 }

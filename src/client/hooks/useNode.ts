@@ -42,7 +42,7 @@ export function useNode(nodeId: string | null): UseNodeReturn {
       // Parse JSON string fields from SQLite
       const raw = data.node;
       setNode({
-        ...raw as TreeNode,
+        ...raw as unknown as TreeNode,
         hooks: typeof raw['hooks'] === 'string' ? JSON.parse(raw['hooks'] as string || 'null') : raw['hooks'] as TreeNode['hooks'],
         mcp_tools: typeof raw['mcp_tools'] === 'string' ? JSON.parse(raw['mcp_tools'] as string || '[]') : raw['mcp_tools'] as TreeNode['mcp_tools'],
         allowed_tools: typeof raw['allowed_tools'] === 'string' ? JSON.parse(raw['allowed_tools'] as string || '[]') : raw['allowed_tools'] as string[],

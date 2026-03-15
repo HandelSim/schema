@@ -4,10 +4,10 @@ export default {
     './index.html',
     './**/*.{js,ts,jsx,tsx}',
   ],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        // ATO brand colors
         ato: {
           50: '#f0f9ff',
           100: '#e0f2fe',
