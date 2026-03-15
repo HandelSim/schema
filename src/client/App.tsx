@@ -23,21 +23,20 @@ import { Project } from './types';
 // ============================================================
 interface CreateProjectModalProps {
   onClose: () => void;
-  onCreate: (name: string, description: string, prompt: string) => Promise<void>;
+  onCreate: (name: string, description: string) => Promise<void>;
 }
 
 const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCreate }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !description.trim()) return;
     setLoading(true);
     try {
-      await onCreate(name, description, prompt);
+      await onCreate(name, description);
       onClose();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to create project');
@@ -51,7 +50,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-900">Create New Project</h2>
-          <p className="text-sm text-gray-500 mt-1">Define the root node — Claude will decompose it into agents.</p>
+          <p className="text-sm text-gray-500 mt-1">Define your project — Claude will plan and decompose it into agents.</p>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           <div>
@@ -66,25 +65,15 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-            <input
-              type="text"
+            <label className="block text-sm font-medium text-gray-700 mb-1">Project Goal / Description *</label>
+            <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
-              placeholder="Brief project summary"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Be as descriptive as possible — include tech stack, constraints, and end goals. The more detail you provide, the better Claude can plan."
+              rows={6}
+              required
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">System Prompt / Spec</label>
-            <textarea
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              placeholder="Describe the full project specification. This becomes the root context for all agents..."
-              rows={8}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
-            />
-            <p className="text-xs text-gray-400 mt-1">This becomes the root CLAUDE.md context inherited by all agents.</p>
           </div>
           <div className="flex gap-3 pt-2">
             <button
@@ -122,7 +111,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ projects, selectedId, o
   <div className="h-full flex flex-col bg-gray-900 text-white">
     <div className="px-3 py-3 border-b border-gray-700">
       <div className="flex items-center justify-between">
-        <h1 className="text-sm font-bold text-white tracking-wide">🌳 ATO</h1>
+        <h1 className="text-sm font-bold text-white tracking-wide">🌳 Agent Tree Orchestrator</h1>
         <button
           onClick={onCreate}
           className="text-xs px-2 py-1 bg-blue-600 rounded hover:bg-blue-700 text-white"
@@ -183,17 +172,22 @@ export default function App() {
   const tree = useTree(selectedProjectId);
   const { node: selectedNode, logs: nodeLogs, clearLogs } = useNode(tree.selectedNodeId);
 
-  const handleCreateProject = useCallback(async (name: string, description: string, prompt: string) => {
+  const handleCreateProject = useCallback(async (name: string, description: string) => {
     const response = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, prompt, system_prompt: prompt }),
+      // Pass description as prompt so decomposition has project context
+      body: JSON.stringify({ name, description, prompt: description }),
     });
     if (!response.ok) throw new Error((await response.json() as { error: string }).error);
-    const data = await response.json() as { project: Project };
+    const data = await response.json() as { project: Project; rootNode: { id: string } };
     setProjects(prev => [data.project, ...prev]);
     setSelectedProjectId(data.project.id);
-  }, []);
+    // Auto-select the root node so the Approve & Decompose button is immediately visible
+    if (data.rootNode?.id) {
+      tree.setSelectedNodeId(data.rootNode.id);
+    }
+  }, [tree]);
 
   const handleSelectNode = useCallback((nodeId: string) => {
     tree.setSelectedNodeId(nodeId);
