@@ -156,17 +156,20 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
       {/* Action buttons */}
       <div className="px-4 py-2 border-b border-gray-700 flex gap-2 flex-wrap flex-shrink-0 bg-gray-900">
         {canApprove && (
-          <>
-            <button
-              onClick={() => handleAction('approve-decompose', () => onApprove(node.id, node.node_type !== 'leaf'))}
-              disabled={!!actionLoading || isRunning}
-              className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 font-medium"
-            >
-              {actionLoading === 'approve-decompose'
-                ? '...'
-                : node.node_type === 'leaf' ? '✓ Approve as Leaf' : '🔱 Approve & Decompose'}
-            </button>
-          </>
+          <button
+            onClick={() => {
+              const isLeaf = node.node_type === 'leaf';
+              handleAction('approve', () => onApprove(node.id, !isLeaf));
+            }}
+            disabled={!!actionLoading || isRunning}
+            className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 font-medium"
+          >
+            {actionLoading === 'approve'
+              ? '...'
+              : node.node_type === 'leaf'
+                ? '✓ Approve'
+                : '🔱 Approve & Decompose'}
+          </button>
         )}
 
         {canExecute && (

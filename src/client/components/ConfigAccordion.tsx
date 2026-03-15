@@ -64,6 +64,19 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
       {/* Model selector */}
       <AccordionSection title="Model & Execution" defaultOpen>
         <div className="space-y-3">
+          {/* is_leaf checkbox */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={node.node_type === 'leaf'}
+              onChange={e => !readOnly && onUpdate({ node_type: e.target.checked ? 'leaf' : 'orchestrator' })}
+              disabled={readOnly}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500 disabled:opacity-50"
+            />
+            <span className="text-xs font-medium text-gray-400">
+              Leaf node (executes directly, no decomposition)
+            </span>
+          </label>
           <div>
             <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
             <select
