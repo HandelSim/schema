@@ -32,8 +32,8 @@ test.describe('Workflow: Project creation and node management', () => {
   test('1. App loads and shows Agent Tree Orchestrator title', async ({ page }) => {
     await screenshot(page, 'step-1-initial-load');
 
-    // Sidebar title
-    await expect(page.getByText('Agent Tree Orchestrator')).toBeVisible();
+    // Sidebar title (shows "Project Orchestrator" in sidebar, full name in browser tab)
+    await expect(page.getByText('Project Orchestrator')).toBeVisible();
 
     // Browser tab title
     await expect(page).toHaveTitle('Agent Tree Orchestrator');
