@@ -6,6 +6,8 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db';
 import { broadcastGlobal } from '../utils/sse';
+import { generateRootClaudeMd } from '../services/claude-md';
+import { generateInitialNode } from '../services/initial-node-generator';
 
 const router = Router();
 
@@ -55,6 +57,12 @@ router.post('/', (req: Request, res: Response) => {
     broadcastGlobal('project:created', { project, rootNode });
 
     res.status(201).json({ project, rootNode });
+
+    // Generate initial node config in background (non-blocking)
+    const desc = description || name;
+    generateInitialNode(rootNodeId, name, desc).catch(err =>
+      console.error('[projects] Initial node generation failed:', err)
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error creating project:', error);
@@ -156,6 +164,52 @@ router.get('/:id/tree', (req: Request, res: Response) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error getting tree:', error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /api/projects/:id/claude-md
+ * Generate and return the CLAUDE.md content for a project.
+ * Returns the auto-generated project context document (read-only).
+ */
+router.get('/:id/claude-md', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+    const content = generateRootClaudeMd(req.params['id']);
+    res.json({ content });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /api/projects/:id/mode
+ * Update project mode (manual/auto).
+ */
+router.patch('/:id/mode', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const { mode } = req.body as { mode: 'manual' | 'auto' };
+    if (!['manual', 'auto'].includes(mode)) {
+      res.status(400).json({ error: 'mode must be "manual" or "auto"' });
+      return;
+    }
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+    db.prepare('UPDATE projects SET mode = ? WHERE id = ?').run(mode, req.params['id']);
+    res.json({ message: 'Mode updated', mode });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
 });
