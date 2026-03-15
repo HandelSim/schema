@@ -154,6 +154,8 @@ export default function App() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [viewMode, setViewMode] = useState<'graph' | 'detail'>('graph');
+  // Tracks a node to auto-select once the new tree loads after project creation
+  const [pendingNodeSelect, setPendingNodeSelect] = useState<string | null>(null);
 
   // Load projects on mount
   React.useEffect(() => {
@@ -172,6 +174,15 @@ export default function App() {
   const tree = useTree(selectedProjectId);
   const { node: selectedNode, logs: nodeLogs, clearLogs } = useNode(tree.selectedNodeId);
 
+  // Auto-select pending node once the tree has loaded for the new project
+  React.useEffect(() => {
+    if (pendingNodeSelect && tree.nodes.length > 0) {
+      tree.setSelectedNodeId(pendingNodeSelect);
+      setPendingNodeSelect(null);
+      setViewMode('detail');
+    }
+  }, [pendingNodeSelect, tree.nodes, tree.setSelectedNodeId]);
+
   const handleCreateProject = useCallback(async (name: string, description: string) => {
     const response = await fetch('/api/projects', {
       method: 'POST',
@@ -183,11 +194,11 @@ export default function App() {
     const data = await response.json() as { project: Project; rootNode: { id: string } };
     setProjects(prev => [data.project, ...prev]);
     setSelectedProjectId(data.project.id);
-    // Auto-select the root node so the Approve & Decompose button is immediately visible
+    // Queue root node for selection once the new tree has loaded
     if (data.rootNode?.id) {
-      tree.setSelectedNodeId(data.rootNode.id);
+      setPendingNodeSelect(data.rootNode.id);
     }
-  }, [tree]);
+  }, []);
 
   const handleSelectNode = useCallback((nodeId: string) => {
     tree.setSelectedNodeId(nodeId);
