@@ -162,7 +162,6 @@ export async function generateAllContexts(projectId: string): Promise<string> {
       model: resolveModelId(node.model),
       maxTurns: 40,
       allowedTools,
-      retryPolicy: { maxAttempts: 2, escalateAfter: 2, delayMs: 1000 },
       screenshots: { enabled: tierConfig.playwrightMcp ?? false },
       permissionMode: 'bypassPermissions' as const,
     };

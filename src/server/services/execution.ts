@@ -132,8 +132,6 @@ function buildHammerConfig(node: NodeRow, workspacePath: string): Partial<Hammer
     sessionId: node.hammer_session_id ?? storedConfig.sessionId ?? undefined,
     sessionDir: '/tmp/hammer-sessions',
     acceptanceChecks,
-    retryPolicy: storedConfig.retryPolicy ?? { maxAttempts: 2, escalateAfter: 2, delayMs: 1000 },
-    escalationPolicy: storedConfig.escalationPolicy ?? { type: 'log' },
     permissionMode: storedConfig.permissionMode ?? 'bypassPermissions',
     env: {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
@@ -206,7 +204,7 @@ export async function executeNode(nodeId: string): Promise<void> {
     // Log cost
     appendLog(nodeId, `Cost: $${result.cost.estimatedUsd.toFixed(4)} (${result.cost.inputTokens} in / ${result.cost.outputTokens} out tokens)`);
 
-    if (result.status === 'success') {
+    if (result.status === 'success' || result.status === 'completed') {
       db.prepare(`UPDATE nodes SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nodeId);
       broadcastGlobal('node:status', { nodeId, status: 'completed' });
       broadcastToNode(nodeId, 'log:complete', {
