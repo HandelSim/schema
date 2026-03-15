@@ -1,23 +1,30 @@
 /**
- * Execution Engine
- * Launches Claude Code CLI as a subprocess to execute leaf node agents.
+ * Execution Engine — HAMMER integration
  *
- * Architecture decision: Using child_process.spawn (not exec) so we can:
- * 1. Stream stdout/stderr in real-time via SSE
- * 2. Handle large outputs without buffer overflow
- * 3. Properly signal process termination
+ * SCHEMA delegates all agent execution to HAMMER, which handles:
+ * - Claude Agent SDK wrapping
+ * - Retry logic with failure prompt reconstruction
+ * - Acceptance check execution and evaluation
+ * - Screenshot capture and visual verification
+ * - Session save/load for resumption
+ * - Cost tracking and budget enforcement
  *
- * Claude Code CLI command format:
- * claude --model {model} --max-turns {max_iterations} --print --output-format json -p "{prompt}"
+ * This file is responsible only for:
+ * - Reading node config from the DB
+ * - Building a HammerConfig from the node's hammer_config JSON
+ * - Calling runHammer()
+ * - Persisting results back to the DB and broadcasting SSE events
  */
-import { spawn, ChildProcess } from 'child_process';
+
 import { join } from 'path';
 import { getDb } from '../db';
 import { broadcastGlobal, broadcastToNode } from '../utils/sse';
 import { setupWorkspace } from './workspace';
+import { maybeRunIntegrationVerification } from './integration-verifier';
+import { runHammer, HammerConfig, resolveConfig } from '@handelSim/hammer';
 
-// Track running processes so we can cancel them
-const runningProcesses = new Map<string, ChildProcess>();
+// Track in-flight executions so we can cancel them
+const runningAbortControllers = new Map<string, AbortController>();
 
 interface NodeRow {
   id: string;
@@ -31,45 +38,42 @@ interface NodeRow {
   allowed_tools: string | null;
   execution_log: string | null;
   error_log: string | null;
+  hammer_config: string | null;
+  hammer_session_id: string | null;
+  acceptance_criteria: string | null;
+  system_prompt: string | null;
 }
 
 /**
- * Map our model names to Claude Code CLI model identifiers.
+ * Map our model names to Claude model identifiers.
  */
 function resolveModelId(model: string): string {
   const modelMap: Record<string, string> = {
-    'sonnet': 'claude-sonnet-4-5',
+    'sonnet': 'claude-sonnet-4-6',
     'haiku': 'claude-haiku-4-5',
-    'opus': 'claude-opus-4-5',
+    'opus': 'claude-opus-4-6',
   };
-  return modelMap[model] || 'claude-sonnet-4-5';
+  return modelMap[model] || 'claude-sonnet-4-6';
 }
 
 /**
- * Get the project ID for a given node by walking to root and finding the project.
+ * Get the project ID for a given node by walking to root.
  */
 function getProjectId(nodeId: string): string {
   const db = getDb();
-
-  // Walk up to find root node
   let currentId: string | null = nodeId;
   let rootId = nodeId;
   while (currentId) {
     const node = db.prepare('SELECT parent_id FROM nodes WHERE id = ?').get(currentId) as { parent_id: string | null } | undefined;
-    if (!node || !node.parent_id) {
-      rootId = currentId;
-      break;
-    }
+    if (!node || !node.parent_id) { rootId = currentId; break; }
     currentId = node.parent_id;
   }
-
-  // Find project with this root node
   const project = db.prepare('SELECT id FROM projects WHERE root_node_id = ?').get(rootId) as { id: string } | undefined;
   return project?.id || 'default';
 }
 
 /**
- * Append a log line to both the node's DB record and SSE stream.
+ * Append a log line to the DB and broadcast via SSE.
  */
 function appendLog(nodeId: string, line: string, isError = false): void {
   const db = getDb();
@@ -90,8 +94,57 @@ function appendLog(nodeId: string, line: string, isError = false): void {
 }
 
 /**
- * Execute a leaf node agent using Claude Code CLI.
- * Streams output in real-time, updates node status on completion.
+ * Build a HammerConfig from a node row.
+ * Merges the node's hammer_config JSON with sensible defaults from the node's DB fields.
+ */
+function buildHammerConfig(node: NodeRow, workspacePath: string): Partial<HammerConfig> & { cwd: string; prompt: string } {
+  // Start with any stored HammerConfig on the node
+  let storedConfig: Partial<HammerConfig> = {};
+  if (node.hammer_config) {
+    try {
+      storedConfig = JSON.parse(node.hammer_config);
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
+  // Parse allowed_tools from JSON string
+  let allowedTools: string[] = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'Agent'];
+  if (node.allowed_tools) {
+    try {
+      allowedTools = JSON.parse(node.allowed_tools);
+    } catch {
+      // use default
+    }
+  }
+
+  // Build acceptance checks from acceptance_criteria
+  const acceptanceChecks = storedConfig.acceptanceChecks ?? undefined;
+
+  return {
+    ...storedConfig,
+    cwd: workspacePath,
+    prompt: node.prompt || 'Complete the task described in CLAUDE.md',
+    model: storedConfig.model ?? resolveModelId(node.model),
+    maxTurns: storedConfig.maxTurns ?? node.max_iterations ?? 10,
+    allowedTools: storedConfig.allowedTools ?? allowedTools,
+    systemPrompt: storedConfig.systemPrompt ?? node.system_prompt ?? undefined,
+    sessionId: node.hammer_session_id ?? storedConfig.sessionId ?? undefined,
+    sessionDir: '/tmp/hammer-sessions',
+    acceptanceChecks,
+    retryPolicy: storedConfig.retryPolicy ?? { maxAttempts: 2, escalateAfter: 2, delayMs: 1000 },
+    escalationPolicy: storedConfig.escalationPolicy ?? { type: 'log' },
+    permissionMode: storedConfig.permissionMode ?? 'bypassPermissions',
+    env: {
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      ...(storedConfig.env ?? {}),
+    },
+  };
+}
+
+/**
+ * Execute a leaf node agent using HAMMER.
+ * HAMMER handles SDK wrapping, retries, acceptance checks, sessions, and cost tracking.
  */
 export async function executeNode(nodeId: string): Promise<void> {
   const db = getDb();
@@ -102,121 +155,81 @@ export async function executeNode(nodeId: string): Promise<void> {
     throw new Error('Cannot directly execute an orchestrator node. Approve children first.');
   }
 
-  if (runningProcesses.has(nodeId)) {
+  if (runningAbortControllers.has(nodeId)) {
     throw new Error(`Node ${nodeId} is already running`);
   }
 
   const projectId = getProjectId(nodeId);
+  const abortController = new AbortController();
+  runningAbortControllers.set(nodeId, abortController);
 
   // Mark as running
   db.prepare(`UPDATE nodes SET status = 'running', started_at = CURRENT_TIMESTAMP, execution_log = '', error_log = '' WHERE id = ?`).run(nodeId);
   broadcastGlobal('node:status', { nodeId, status: 'running' });
 
   try {
-    // Set up workspace with CLAUDE.md, settings, MCP config
-    broadcastToNode(nodeId, 'log:output', { message: 'Setting up workspace...', timestamp: new Date().toISOString() });
+    appendLog(nodeId, 'Setting up workspace...');
     const workspacePath = await setupWorkspace(nodeId, projectId);
+    appendLog(nodeId, `Workspace ready at: ${workspacePath}`);
 
-    broadcastToNode(nodeId, 'log:output', {
-      message: `Workspace ready at: ${workspacePath}`,
-      timestamp: new Date().toISOString()
-    });
+    const hammerPartialConfig = buildHammerConfig(node, workspacePath);
+    appendLog(nodeId, `Launching HAMMER (model: ${hammerPartialConfig.model}, maxTurns: ${hammerPartialConfig.maxTurns})...`);
 
-    const modelId = resolveModelId(node.model);
-    const prompt = node.prompt || 'Complete the task described in CLAUDE.md';
-    const maxTurns = node.max_iterations || 10;
+    // Resolve full config (auto-detects acceptance checks, workspace type, etc.)
+    const hammerConfig = await resolveConfig(hammerPartialConfig);
 
-    // Build Claude Code CLI command
-    // --print: non-interactive mode
-    // --output-format json: structured output for parsing
-    // -p: initial prompt
-    const claudeArgs = [
-      '--model', modelId,
-      '--max-turns', String(maxTurns),
-      '--print',
-      '--output-format', 'json',
-      '-p', prompt,
-    ];
+    appendLog(nodeId, `Acceptance checks: ${hammerConfig.acceptanceChecks?.map(c => c.name).join(', ') || 'auto-detected'}`);
 
-    broadcastToNode(nodeId, 'log:output', {
-      message: `Launching: claude ${claudeArgs.slice(0, 4).join(' ')} ...`,
-      timestamp: new Date().toISOString()
-    });
+    // Run HAMMER — handles everything internally
+    const result = await runHammer(hammerConfig);
 
-    // Check if claude CLI is available
-    const claudeAvailable = await checkClaudeAvailable();
-    if (!claudeAvailable) {
-      // Graceful degradation: simulate execution for development/testing
-      await simulateExecution(nodeId, node);
-      return;
+    runningAbortControllers.delete(nodeId);
+
+    // Persist results
+    db.prepare(`UPDATE nodes SET hammer_session_id = ?, hammer_cost = ? WHERE id = ?`)
+      .run(result.sessionId ?? null, JSON.stringify(result.cost), nodeId);
+
+    // Stream output to log
+    if (result.output) {
+      const lines = result.output.split('\n');
+      for (const line of lines.slice(-100)) { // last 100 lines
+        if (line.trim()) appendLog(nodeId, line);
+      }
     }
 
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn('claude', claudeArgs, {
-        cwd: workspacePath,
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
+    // Log acceptance check results
+    for (const check of result.acceptanceResults) {
+      const icon = check.passed ? '✓' : '✗';
+      appendLog(nodeId, `[acceptance] ${icon} ${check.name} (${check.durationMs}ms)`, !check.passed);
+    }
+
+    // Log cost
+    appendLog(nodeId, `Cost: $${result.cost.estimatedUsd.toFixed(4)} (${result.cost.inputTokens} in / ${result.cost.outputTokens} out tokens)`);
+
+    if (result.status === 'success') {
+      db.prepare(`UPDATE nodes SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nodeId);
+      broadcastGlobal('node:status', { nodeId, status: 'completed' });
+      broadcastToNode(nodeId, 'log:complete', {
+        message: `Execution completed successfully (${result.attempts} attempt${result.attempts > 1 ? 's' : ''})`,
+        exitCode: 0,
       });
-
-      runningProcesses.set(nodeId, proc);
-
-      let outputBuffer = '';
-      let errorBuffer = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        outputBuffer += text;
-
-        // Stream line by line for real-time feedback
-        const lines = outputBuffer.split('\n');
-        outputBuffer = lines.pop() || ''; // keep incomplete line in buffer
-        for (const line of lines) {
-          if (line.trim()) appendLog(nodeId, line);
-        }
-      });
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        errorBuffer += text;
-
-        const lines = errorBuffer.split('\n');
-        errorBuffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.trim()) appendLog(nodeId, line, true);
-        }
-      });
-
-      proc.on('close', (code) => {
-        runningProcesses.delete(nodeId);
-
-        // Flush remaining buffer content
-        if (outputBuffer.trim()) appendLog(nodeId, outputBuffer);
-        if (errorBuffer.trim()) appendLog(nodeId, errorBuffer, true);
-
-        if (code === 0) {
-          db.prepare(`UPDATE nodes SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nodeId);
-          broadcastGlobal('node:status', { nodeId, status: 'completed' });
-          broadcastToNode(nodeId, 'log:complete', { message: 'Execution completed successfully', exitCode: 0 });
-          resolve();
-        } else {
-          const errMsg = `Process exited with code ${code}`;
-          db.prepare(`UPDATE nodes SET status = 'failed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nodeId);
-          broadcastGlobal('node:status', { nodeId, status: 'failed' });
-          broadcastToNode(nodeId, 'log:error', { message: errMsg, exitCode: code });
-          reject(new Error(errMsg));
-        }
-      });
-
-      proc.on('error', (err) => {
-        runningProcesses.delete(nodeId);
-        reject(err);
-      });
-    });
+      maybeRunIntegrationVerification(nodeId).catch(err =>
+        console.error('[execution] Integration verification error:', err)
+      );
+    } else {
+      const errMsg = `HAMMER status: ${result.status} — ${result.error ?? 'unknown'}`;
+      db.prepare(`UPDATE nodes SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error_log = ? WHERE id = ?`)
+        .run(errMsg, nodeId);
+      broadcastGlobal('node:status', { nodeId, status: 'failed' });
+      broadcastToNode(nodeId, 'log:error', { message: errMsg });
+      maybeRunIntegrationVerification(nodeId).catch(err =>
+        console.error('[execution] Integration verification error:', err)
+      );
+      throw new Error(errMsg);
+    }
 
   } catch (error) {
+    runningAbortControllers.delete(nodeId);
     const errorMessage = error instanceof Error ? error.message : String(error);
     db.prepare(`UPDATE nodes SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error_log = ? WHERE id = ?`)
       .run(errorMessage, nodeId);
@@ -227,49 +240,14 @@ export async function executeNode(nodeId: string): Promise<void> {
 }
 
 /**
- * Check if Claude Code CLI is available in the PATH.
- */
-async function checkClaudeAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn('which', ['claude'], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
-  });
-}
-
-/**
- * Simulate execution when Claude Code CLI is not available.
- * Used for development/testing without the full CLI installed.
- */
-async function simulateExecution(nodeId: string, node: NodeRow): Promise<void> {
-  const db = getDb();
-
-  appendLog(nodeId, '[SIMULATION MODE] Claude Code CLI not found. Simulating execution...');
-  appendLog(nodeId, `Task: ${node.prompt || 'No prompt defined'}`);
-  appendLog(nodeId, `Model: ${node.model}, Max turns: ${node.max_iterations}`);
-
-  // Simulate some processing time
-  await new Promise(r => setTimeout(r, 1000));
-  appendLog(nodeId, '[SIMULATION] Analyzing task requirements...');
-
-  await new Promise(r => setTimeout(r, 1000));
-  appendLog(nodeId, '[SIMULATION] Task analysis complete. In production, Claude Code would execute here.');
-  appendLog(nodeId, '[SIMULATION] Install Claude Code CLI: npm install -g @anthropic-ai/claude-code');
-
-  db.prepare(`UPDATE nodes SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nodeId);
-  broadcastGlobal('node:status', { nodeId, status: 'completed' });
-  broadcastToNode(nodeId, 'log:complete', { message: 'Simulation complete', exitCode: 0 });
-}
-
-/**
  * Cancel a running execution.
  */
 export function cancelExecution(nodeId: string): boolean {
-  const proc = runningProcesses.get(nodeId);
-  if (!proc) return false;
+  const controller = runningAbortControllers.get(nodeId);
+  if (!controller) return false;
 
-  proc.kill('SIGTERM');
-  runningProcesses.delete(nodeId);
+  controller.abort();
+  runningAbortControllers.delete(nodeId);
 
   const db = getDb();
   db.prepare(`UPDATE nodes SET status = 'failed', error_log = 'Cancelled by user' WHERE id = ?`).run(nodeId);
@@ -282,5 +260,14 @@ export function cancelExecution(nodeId: string): boolean {
  * Get list of currently running node IDs.
  */
 export function getRunningNodes(): string[] {
-  return Array.from(runningProcesses.keys());
+  return Array.from(runningAbortControllers.keys());
+}
+
+/**
+ * Store a HammerConfig JSON on a node (called by Generate Agent Contexts).
+ */
+export function storeHammerConfig(nodeId: string, config: Partial<HammerConfig>): void {
+  const db = getDb();
+  db.prepare('UPDATE nodes SET hammer_config = ? WHERE id = ?')
+    .run(JSON.stringify(config), nodeId);
 }
