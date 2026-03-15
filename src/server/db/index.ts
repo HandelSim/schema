@@ -30,6 +30,11 @@ export function getDb(): Database.Database {
     const schemaPath = join(__dirname, 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
     _db.exec(schema);
+
+    // Incremental migrations for columns added after initial schema
+    try {
+      _db.prepare("ALTER TABLE projects ADD COLUMN mode TEXT DEFAULT 'manual'").run();
+    } catch { /* column already exists */ }
   }
   return _db;
 }

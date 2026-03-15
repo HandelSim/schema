@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   description TEXT,
   root_node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
+  mode TEXT DEFAULT 'manual' CHECK(mode IN ('manual','auto')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
