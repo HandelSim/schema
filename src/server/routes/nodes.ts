@@ -149,6 +149,47 @@ router.post('/', (req: Request, res: Response) => {
  * Approve a node. If it's an orchestrator, trigger decomposition.
  * If it's a leaf, just mark as approved.
  */
+/** Walk up the tree to find the project mode for a given node. */
+function getProjectMode(nodeId: string): 'manual' | 'auto' {
+  const db = getDb();
+  // Find root node by walking up parent chain
+  let currentId = nodeId;
+  for (let i = 0; i < 20; i++) {
+    const row = db.prepare('SELECT id, parent_id FROM nodes WHERE id = ?').get(currentId) as
+      { id: string; parent_id: string | null } | undefined;
+    if (!row) break;
+    if (!row.parent_id) {
+      // This is the root node — find the project
+      const project = db.prepare('SELECT mode FROM projects WHERE root_node_id = ?').get(row.id) as
+        { mode: string } | undefined;
+      return (project?.mode === 'auto') ? 'auto' : 'manual';
+    }
+    currentId = row.parent_id;
+  }
+  return 'manual';
+}
+
+/** Auto-approve and decompose a child node (for auto mode). */
+async function autoApproveChild(nodeId: string): Promise<void> {
+  const db = getDb();
+  const child = db.prepare('SELECT id, node_type, status FROM nodes WHERE id = ?').get(nodeId) as
+    { id: string; node_type: string; status: string } | undefined;
+  if (!child || child.status !== 'pending') return;
+
+  db.prepare(`UPDATE nodes SET status = 'approved' WHERE id = ?`).run(nodeId);
+  broadcastGlobal('node:status', { nodeId, status: 'approved' });
+
+  if (child.node_type !== 'leaf') {
+    await decomposeNode(nodeId);
+    // Recursively auto-approve grandchildren
+    const grandchildren = db.prepare('SELECT id FROM nodes WHERE parent_id = ? AND status = ?')
+      .all(nodeId, 'pending') as Array<{ id: string }>;
+    for (const gc of grandchildren) {
+      await autoApproveChild(gc.id);
+    }
+  }
+}
+
 router.post('/:id/approve', (req: Request, res: Response) => {
   const db = getDb();
   const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get(req.params['id']) as {
@@ -163,6 +204,7 @@ router.post('/:id/approve', (req: Request, res: Response) => {
   }
 
   const { decompose = true } = req.body as { decompose?: boolean };
+  const projectMode = getProjectMode(node.id);
 
   // Mark as approved immediately
   db.prepare(`UPDATE nodes SET status = 'approved' WHERE id = ?`).run(req.params['id']);
@@ -173,7 +215,18 @@ router.post('/:id/approve', (req: Request, res: Response) => {
     res.json({ message: 'Approved, decomposition started', nodeId: node.id });
 
     // Run decomposition in background (don't await)
-    decomposeNode(node.id).catch(err => {
+    decomposeNode(node.id).then(() => {
+      // In auto mode, auto-approve all pending children
+      if (projectMode === 'auto') {
+        const children = db.prepare('SELECT id FROM nodes WHERE parent_id = ? AND status = ?')
+          .all(node.id, 'pending') as Array<{ id: string }>;
+        for (const child of children) {
+          autoApproveChild(child.id).catch(err =>
+            console.error(`Auto-approve failed for child ${child.id}:`, err)
+          );
+        }
+      }
+    }).catch(err => {
       console.error(`Decomposition failed for node ${node.id}:`, err);
     });
   } else {
