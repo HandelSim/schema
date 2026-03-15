@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE \"\\.(tsx?|jsx?|html|css|vue|svelte)$\"; then npx playwright test --reporter=line 2>&1 | tail -10; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
