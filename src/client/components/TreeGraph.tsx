@@ -67,6 +67,8 @@ const AgentNode: React.FC<NodeProps> = ({ data }) => {
   return (
     <div
       onClick={() => onSelect(node.id)}
+      data-testid="tree-node"
+      data-node-id={node.id}
       className={`
         relative w-[200px] rounded-lg border-2 p-2.5 cursor-pointer transition-all
         ${style.bg} ${style.border}
@@ -221,7 +223,7 @@ export const TreeGraph: React.FC<TreeGraphProps> = ({
   }, [nodes]);
 
   return (
-    <div className="w-full h-full bg-gray-950">
+    <div className="w-full h-full bg-gray-950" data-testid="tree-canvas">
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}

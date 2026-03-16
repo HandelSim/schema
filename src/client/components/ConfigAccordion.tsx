@@ -3,23 +3,25 @@
  * Organizes the many configuration options into digestible sections.
  */
 import React, { useState } from 'react';
-import { TreeNode, HookConfig, ModelType } from '../types';
+import { TreeNode, HookConfig, ModelType, TestingTier } from '../types';
 import { HookTemplates } from './HookTemplates';
 
 interface AccordionSectionProps {
   title: string;
+  testId?: string;
   count?: number;
   defaultOpen?: boolean;
   children: React.ReactNode;
 }
 
-const AccordionSection: React.FC<AccordionSectionProps> = ({ title, count, defaultOpen = false, children }) => {
+const AccordionSection: React.FC<AccordionSectionProps> = ({ title, testId, count, defaultOpen = false, children }) => {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="border border-gray-700 rounded-lg overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-3 py-2 bg-gray-900 hover:bg-gray-800 text-left"
+        {...(testId ? { 'data-testid': testId } : {})}
       >
         <span className="text-sm font-medium text-gray-300">{title}</span>
         <div className="flex items-center gap-2">
@@ -29,7 +31,7 @@ const AccordionSection: React.FC<AccordionSectionProps> = ({ title, count, defau
           <span className="text-gray-500 text-xs">{open ? '▲' : '▼'}</span>
         </div>
       </button>
-      {open && <div className="p-3 border-t border-gray-700">{children}</div>}
+      {open && <div className="p-3 border-t border-gray-700" data-testid="tab-content">{children}</div>}
     </div>
   );
 };
@@ -62,7 +64,7 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
   return (
     <div className="space-y-2">
       {/* Model selector */}
-      <AccordionSection title="Model & Execution" defaultOpen>
+      <AccordionSection title="Model & Execution" testId="config-tab-model-execution" defaultOpen>
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
@@ -116,11 +118,32 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
               </select>
             </div>
           </div>
+          {/* Improvement 1: Testing Tier selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">Testing Tier</label>
+            <select
+              value={node.testing_tier || 'tier1'}
+              onChange={e => !readOnly && onUpdate({ testing_tier: e.target.value as TestingTier })}
+              disabled={readOnly}
+              className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-800 disabled:text-gray-400"
+            >
+              <option value="tier1">Tier 1 — CLI Tests (zero agent tokens)</option>
+              <option value="tier2">Tier 2 — Screenshots (Playwright CLI)</option>
+              <option value="tier3">Tier 3 — Integration (Playwright MCP)</option>
+            </select>
+            <p className="text-xs text-gray-600 mt-0.5">
+              {node.testing_tier === 'tier3'
+                ? 'Full Playwright MCP — requires sibling completion first.'
+                : node.testing_tier === 'tier2'
+                ? 'Headless screenshot capture — no interactive tokens.'
+                : 'Lint, type check, unit tests — zero agent tokens.'}
+            </p>
+          </div>
         </div>
       </AccordionSection>
 
       {/* Acceptance Criteria */}
-      <AccordionSection title="Acceptance Criteria">
+      <AccordionSection title="Acceptance Criteria" testId="config-tab-acceptance">
         <textarea
           value={node.acceptance_criteria || ''}
           onChange={e => !readOnly && onUpdate({ acceptance_criteria: e.target.value })}
@@ -132,7 +155,7 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
       </AccordionSection>
 
       {/* File Boundaries */}
-      <AccordionSection title="File Boundaries" count={node.allowed_paths.length}>
+      <AccordionSection title="File Boundaries" testId="config-tab-allowed-paths" count={node.allowed_paths.length}>
         <div className="space-y-2">
           <p className="text-xs text-gray-500 dark:text-gray-500">One path per line. Agent can only read/write these paths.</p>
           <textarea
@@ -147,7 +170,7 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
       </AccordionSection>
 
       {/* Allowed Tools */}
-      <AccordionSection title="Allowed Tools" count={node.allowed_tools.length}>
+      <AccordionSection title="Allowed Tools" testId="config-tab-allowed-tools" count={node.allowed_tools.length}>
         <div className="space-y-2">
           <p className="text-xs text-gray-500 dark:text-gray-500">One tool per line.</p>
           <textarea
@@ -162,7 +185,7 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
       </AccordionSection>
 
       {/* Dependencies */}
-      <AccordionSection title="Dependencies" count={node.dependencies.length}>
+      <AccordionSection title="Dependencies" testId="config-tab-dependencies" count={node.dependencies.length}>
         <div className="space-y-2">
           <p className="text-xs text-gray-500 dark:text-gray-500">Sibling node names this node depends on (one per line).</p>
           <textarea
@@ -176,8 +199,36 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
         </div>
       </AccordionSection>
 
+      {/* Improvement 3: API Contracts */}
+      <AccordionSection title="API Contracts" testId="config-tab-api-contracts" count={(node.apis_provided?.length || 0) + (node.apis_consumed?.length || 0)}>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-green-400 mb-1">APIs Provided (one per line)</label>
+            <textarea
+              value={(node.apis_provided || []).join('\n')}
+              onChange={e => !readOnly && handleArrayChange('apis_provided' as keyof TreeNode, e.target.value)}
+              readOnly={readOnly}
+              placeholder="user-auth&#10;payment-api"
+              rows={3}
+              className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y disabled:bg-gray-800 disabled:text-gray-400 placeholder-gray-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-blue-400 mb-1">APIs Consumed (one per line)</label>
+            <textarea
+              value={(node.apis_consumed || []).join('\n')}
+              onChange={e => !readOnly && handleArrayChange('apis_consumed' as keyof TreeNode, e.target.value)}
+              readOnly={readOnly}
+              placeholder="database-schema&#10;auth-service"
+              rows={3}
+              className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y disabled:bg-gray-800 disabled:text-gray-400 placeholder-gray-600"
+            />
+          </div>
+        </div>
+      </AccordionSection>
+
       {/* Hooks */}
-      <AccordionSection title="Hooks (JSON)">
+      <AccordionSection title="Hooks (JSON)" testId="config-tab-hooks">
         <div className="space-y-2">
           {!readOnly && (
             <HookTemplates
@@ -190,13 +241,14 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
             onChange={e => !readOnly && handleHooksChange(e.target.value)}
             readOnly={readOnly}
             rows={6}
+            data-testid="hooks-editor"
             className="w-full text-xs border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y disabled:bg-gray-800 disabled:text-gray-400"
           />
         </div>
       </AccordionSection>
 
       {/* MCP Tools */}
-      <AccordionSection title="MCP Tools" count={node.mcp_tools.length}>
+      <AccordionSection title="MCP Tools" testId="config-tab-mcp-tools" count={node.mcp_tools.length}>
         <div className="space-y-2">
           <p className="text-xs text-gray-500 dark:text-gray-500">MCP server configurations in JSON array format.</p>
           <textarea
@@ -216,7 +268,7 @@ export const ConfigAccordion: React.FC<ConfigAccordionProps> = ({ node, onUpdate
       </AccordionSection>
 
       {/* Context Files */}
-      <AccordionSection title="Context Files" count={node.context_files.length}>
+      <AccordionSection title="Context Files" testId="config-tab-context-files" count={node.context_files.length}>
         <div className="space-y-2">
           <p className="text-xs text-gray-500 dark:text-gray-500">Files copied into workspace for reference (one per line).</p>
           <textarea

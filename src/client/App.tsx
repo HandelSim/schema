@@ -1,14 +1,332 @@
 /**
  * App - Main application shell with three-panel layout.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useTree } from './hooks/useTree';
 import { useNode } from './hooks/useNode';
 import { TreeGraph } from './components/TreeGraph';
 import { NodeDetail } from './components/NodeDetail';
 import { ExecutionLog } from './components/ExecutionLog';
 import { StatusBadge } from './components/StatusBadge';
-import { Project } from './types';
+import { Project, ProjectStatus, ContractProposal, Contract } from './types';
+
+// ============================================================
+// Project Lifecycle Phase Bar (Improvement 2)
+// ============================================================
+const PHASES: { key: ProjectStatus; label: string }[] = [
+  { key: 'building', label: 'Building' },
+  { key: 'tree_approved', label: 'Tree Approved' },
+  { key: 'contexts_generating', label: 'Generating Contexts' },
+  { key: 'contexts_generated', label: 'Contexts Ready' },
+  { key: 'executing', label: 'Executing' },
+  { key: 'completed', label: 'Completed' },
+];
+
+const PHASE_ORDER: ProjectStatus[] = [
+  'building', 'tree_approved', 'contexts_generating', 'contexts_generated', 'executing', 'completed',
+];
+
+interface PhaseActionBarProps {
+  project: Project;
+  onPhaseAction: (action: string) => Promise<void>;
+}
+
+const PhaseActionBar: React.FC<PhaseActionBarProps> = ({ project, onPhaseAction }) => {
+  const [loading, setLoading] = useState<string | null>(null);
+  const status = project.status || 'building';
+  const currentIdx = PHASE_ORDER.indexOf(status as ProjectStatus);
+
+  const handleAction = async (action: string) => {
+    setLoading(action);
+    try { await onPhaseAction(action); } catch (e) { alert(String(e)); } finally { setLoading(null); }
+  };
+
+  return (
+    <div className="border-b border-gray-700 bg-gray-900 px-4 py-2">
+      {/* Phase indicators */}
+      <div className="flex items-center gap-1 mb-2 overflow-x-auto" data-testid="project-status">
+        {PHASES.map((phase, idx) => {
+          const isActive = phase.key === status;
+          const isPast = idx < currentIdx;
+          const isFailed = status === 'failed';
+          return (
+            <React.Fragment key={phase.key}>
+              <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${
+                isActive && isFailed ? 'bg-red-900 text-red-300' :
+                isActive ? 'bg-blue-700 text-white font-semibold' :
+                isPast ? 'bg-green-900 text-green-400' :
+                'bg-gray-800 text-gray-500'
+              }`}>
+                {isPast && <span>✓</span>}
+                {isActive && !isFailed && <span className="animate-pulse">●</span>}
+                {phase.label}
+              </div>
+              {idx < PHASES.length - 1 && <span className="text-gray-600 text-xs">›</span>}
+            </React.Fragment>
+          );
+        })}
+      </div>
+      {/* Action buttons per phase */}
+      <div className="flex items-center gap-2">
+        {status === 'building' && (
+          <button
+            onClick={() => handleAction('approve-tree')}
+            disabled={loading === 'approve-tree'}
+            data-testid="approve-tree-button"
+            className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {loading === 'approve-tree' ? 'Approving...' : 'Approve Tree'}
+          </button>
+        )}
+        {status === 'tree_approved' && (
+          <button
+            onClick={() => handleAction('generate-contexts')}
+            disabled={loading === 'generate-contexts'}
+            data-testid="generate-contexts-button"
+            className="text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+          >
+            {loading === 'generate-contexts' ? 'Generating...' : 'Generate Contexts'}
+          </button>
+        )}
+        {status === 'contexts_generated' && (
+          <button
+            onClick={() => handleAction('start-execution')}
+            disabled={loading === 'start-execution'}
+            data-testid="start-execution-button"
+            className="text-xs px-3 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {loading === 'start-execution' ? 'Starting...' : 'Start Execution'}
+          </button>
+        )}
+        {status === 'contexts_generating' && (
+          <span className="text-xs text-gray-400 animate-pulse">Generating CLAUDE.md hierarchy...</span>
+        )}
+        {status === 'executing' && (
+          <span className="text-xs text-gray-400 animate-pulse">Agents executing...</span>
+        )}
+        {status === 'completed' && (
+          <span className="text-xs text-green-400">Project complete</span>
+        )}
+        {status === 'failed' && (
+          <span className="text-xs text-red-400">Project failed</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// Contract Registry View (Improvement 3)
+// ============================================================
+interface RegistryEntry {
+  nodeId: string;
+  nodeName: string;
+  contracts: Contract[];
+  apisProvided: string[];
+  apisConsumed: string[];
+}
+
+interface ContractRegistryProps {
+  projectId: string;
+}
+
+const ContractRegistry: React.FC<ContractRegistryProps> = ({ projectId }) => {
+  const [registry, setRegistry] = useState<RegistryEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  const loadRegistry = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/contract-registry`);
+      const data = await r.json() as { registry: RegistryEntry[] };
+      setRegistry(data.registry || []);
+    } catch { /* ignore */ } finally { setLoading(false); }
+  }, [projectId]);
+
+  useEffect(() => { loadRegistry(); }, [loadRegistry]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      await fetch(`/api/projects/${projectId}/generate-contracts`, { method: 'POST' });
+      await loadRegistry();
+    } catch { /* ignore */ } finally { setGenerating(false); }
+  };
+
+  return (
+    <div className="h-full overflow-y-auto p-3 space-y-3">
+      <div className="flex items-center justify-between sticky top-0 bg-gray-950 pb-2">
+        <h3 className="text-sm font-semibold text-gray-200">Contract Registry</h3>
+        <div className="flex gap-2">
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="text-xs px-2 py-1 bg-purple-700 text-white rounded hover:bg-purple-600 disabled:opacity-50"
+          >
+            {generating ? 'Generating...' : 'Generate Contract Files'}
+          </button>
+          <button onClick={loadRegistry} className="text-xs px-2 py-1 border border-gray-700 text-gray-400 rounded hover:bg-gray-800">
+            ↻
+          </button>
+        </div>
+      </div>
+
+      {loading && <p className="text-xs text-gray-500 animate-pulse">Loading registry...</p>}
+
+      {!loading && registry.length === 0 && (
+        <div className="text-center py-8">
+          <p className="text-xs text-gray-500">No contracts yet.</p>
+          <p className="text-xs text-gray-600 mt-1">Add apis_provided/apis_consumed to nodes, then generate.</p>
+        </div>
+      )}
+
+      {registry.map(entry => (
+        <div key={entry.nodeId} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-gray-800 flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-200">{entry.nodeName}</span>
+            <span className="text-xs text-gray-500">{entry.contracts.length} contracts</span>
+          </div>
+          <div className="p-3 space-y-2">
+            {entry.apisProvided.length > 0 && (
+              <div>
+                <span className="text-xs text-green-400 font-medium">Provides: </span>
+                <span className="text-xs text-gray-300">{entry.apisProvided.join(', ')}</span>
+              </div>
+            )}
+            {entry.apisConsumed.length > 0 && (
+              <div>
+                <span className="text-xs text-blue-400 font-medium">Consumes: </span>
+                <span className="text-xs text-gray-300">{entry.apisConsumed.join(', ')}</span>
+              </div>
+            )}
+            {entry.contracts.map(c => (
+              <div key={c.id} className="bg-gray-900 rounded p-2">
+                <div className="text-xs font-medium text-gray-300">{c.name}</div>
+                {c.content && (
+                  <pre className="text-xs text-gray-500 mt-1 overflow-hidden max-h-16 font-mono">
+                    {c.content.substring(0, 200)}{c.content.length > 200 ? '...' : ''}
+                  </pre>
+                )}
+                {!c.content && (
+                  <p className="text-xs text-gray-600 mt-1 italic">No content yet</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ============================================================
+// Contract Changes Panel (Improvement 4)
+// ============================================================
+const ContractChangesPanel: React.FC = () => {
+  const [proposals, setProposals] = useState<ContractProposal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/proposals');
+      const data = await r.json() as { proposals: ContractProposal[] };
+      setProposals(data.proposals || []);
+    } catch { /* ignore */ } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleApprove = async (id: string) => {
+    setActionLoading(id + '-approve');
+    try {
+      await fetch(`/api/proposals/${id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewer: 'human' }) });
+      await load();
+    } catch { /* ignore */ } finally { setActionLoading(null); }
+  };
+
+  const handleReject = async (id: string) => {
+    setActionLoading(id + '-reject');
+    try {
+      await fetch(`/api/proposals/${id}/reject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewer: 'human' }) });
+      await load();
+    } catch { /* ignore */ } finally { setActionLoading(null); }
+  };
+
+  const pending = proposals.filter(p => p.status === 'pending');
+  const resolved = proposals.filter(p => p.status !== 'pending');
+
+  return (
+    <div className="h-full overflow-y-auto p-3 space-y-3">
+      <div className="flex items-center justify-between sticky top-0 bg-gray-950 pb-2">
+        <h3 className="text-sm font-semibold text-gray-200">
+          Contract Changes
+          {pending.length > 0 && (
+            <span className="ml-2 text-xs bg-orange-700 text-white px-1.5 py-0.5 rounded-full">{pending.length}</span>
+          )}
+        </h3>
+        <button onClick={load} className="text-xs px-2 py-1 border border-gray-700 text-gray-400 rounded hover:bg-gray-800">↻</button>
+      </div>
+
+      {loading && <p className="text-xs text-gray-500 animate-pulse">Loading...</p>}
+
+      {!loading && proposals.length === 0 && (
+        <p className="text-xs text-gray-500 text-center py-8">No contract change proposals</p>
+      )}
+
+      {pending.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-orange-400 mb-2">Pending Review ({pending.length})</p>
+          {pending.map(p => (
+            <div key={p.id} className="border border-orange-800 rounded-lg p-3 mb-2 bg-orange-950/20">
+              <div className="flex items-center justify-between mb-1">
+                <span className={`text-xs font-semibold ${p.change_type === 'breaking' ? 'text-red-400' : 'text-yellow-400'}`}>
+                  {p.change_type === 'breaking' ? 'BREAKING' : 'Compatible'} Change
+                </span>
+                <span className="text-xs text-gray-500">{new Date(p.created_at).toLocaleTimeString()}</span>
+              </div>
+              {p.analysis && <p className="text-xs text-gray-400 mb-2 whitespace-pre-wrap">{p.analysis}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleApprove(p.id)}
+                  disabled={actionLoading === p.id + '-approve'}
+                  className="text-xs px-2 py-1 bg-green-700 text-white rounded hover:bg-green-600 disabled:opacity-50"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleReject(p.id)}
+                  disabled={actionLoading === p.id + '-reject'}
+                  className="text-xs px-2 py-1 bg-red-800 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {resolved.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 mb-2">Resolved ({resolved.length})</p>
+          {resolved.slice(0, 10).map(p => (
+            <div key={p.id} className={`border rounded-lg p-2 mb-1 text-xs ${
+              p.status === 'approved' ? 'border-green-900 text-green-400' : 'border-red-900 text-red-400'
+            }`}>
+              <span className="capitalize">{p.status}</span>
+              {' — '}
+              <span className="text-gray-500">{p.change_type}</span>
+              {p.reviewed_by && <span className="text-gray-600"> by {p.reviewed_by}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ============================================================
 // Project Creation Modal
@@ -53,6 +371,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
               onChange={e => setName(e.target.value)}
               placeholder="e.g. E-commerce Platform v2"
               required
+              data-testid="project-name"
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -64,6 +383,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
               placeholder="Be as descriptive as possible — include tech stack, constraints, and end goals. The more detail you provide, the better Claude can plan."
               rows={6}
               required
+              data-testid="project-prompt"
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
             />
           </div>
@@ -71,6 +391,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
             <button
               type="submit"
               disabled={loading || !name.trim() || !description.trim()}
+              data-testid="create-project"
               className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
             >
               {loading ? 'Creating...' : 'Create Project'}
@@ -78,6 +399,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
             <button
               type="button"
               onClick={onClose}
+              data-testid="cancel-button"
               className="flex-1 border border-gray-600 text-gray-300 py-2 rounded-lg text-sm font-medium hover:bg-gray-700"
             >
               Cancel
@@ -108,6 +430,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ projects, selectedId, o
           </h1>
         <button
           onClick={onCreate}
+          data-testid="new-project-button"
           className="text-xs px-2 py-1 bg-blue-600 rounded hover:bg-blue-700 text-white"
         >
           + New
@@ -116,7 +439,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ projects, selectedId, o
     </div>
     <div className="flex-1 overflow-y-auto py-2">
       {projects.length === 0 ? (
-        <div className="px-3 py-4 text-center">
+        <div className="px-3 py-4 text-center" data-testid="empty-state">
           <p className="text-xs text-gray-500">No projects yet</p>
           <button onClick={onCreate} className="mt-2 text-xs text-blue-400 hover:text-blue-300">
             Create your first project →
@@ -127,6 +450,8 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ projects, selectedId, o
           <button
             key={p.id}
             onClick={() => onSelect(p.id)}
+            data-testid="project-item"
+            data-project-id={p.id}
             className={`w-full text-left px-3 py-2.5 hover:bg-gray-800 transition-colors ${
               selectedId === p.id ? 'bg-gray-800 border-l-2 border-blue-400' : ''
             }`}
@@ -147,7 +472,7 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [viewMode, setViewMode] = useState<'graph' | 'detail'>('graph');
+  const [viewMode, setViewMode] = useState<'graph' | 'detail' | 'registry' | 'changes'>('graph');
   const [projectMode, setProjectMode] = useState<'manual' | 'auto'>('manual');
   // Tracks a node to auto-select once the new tree loads after project creation
   const [pendingNodeSelect, setPendingNodeSelect] = useState<string | null>(null);
@@ -215,6 +540,26 @@ export default function App() {
     setViewMode('detail');
   }, [tree]);
 
+  // Improvement 2: handle lifecycle phase transitions
+  const handlePhaseAction = useCallback(async (action: string) => {
+    if (!selectedProjectId) return;
+    const response = await fetch(`/api/projects/${selectedProjectId}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      const err = await response.json() as { error: string };
+      throw new Error(err.error);
+    }
+    const data = await response.json() as { status?: string };
+    if (data.status) {
+      setProjects(prev => prev.map(p =>
+        p.id === selectedProjectId ? { ...p, status: data.status as ProjectStatus } : p
+      ));
+    }
+    tree.refreshTree();
+  }, [selectedProjectId, tree]);
+
   const allLogs = [
     ...tree.logs,
     ...nodeLogs.filter(l => !tree.logs.some(tl => tl.id === l.id)),
@@ -266,6 +611,18 @@ export default function App() {
                 >
                   Detail
                 </button>
+                <button
+                  onClick={() => setViewMode('registry')}
+                  className={`text-xs px-3 py-1 ${viewMode === 'registry' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
+                >
+                  Contracts
+                </button>
+                <button
+                  onClick={() => setViewMode('changes')}
+                  className={`text-xs px-3 py-1 ${viewMode === 'changes' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
+                >
+                  Changes
+                </button>
               </div>
               {/* Mode toggle */}
               <div className="flex items-center border border-gray-700 rounded overflow-hidden">
@@ -297,23 +654,31 @@ export default function App() {
           )}
         </div>
 
+        {/* Improvement 2: Phase action bar */}
+        {tree.project && (
+          <PhaseActionBar
+            project={tree.project}
+            onPhaseAction={handlePhaseAction}
+          />
+        )}
+
         {/* Main content area */}
         <div className="flex-1 overflow-hidden flex">
           <div className="flex-1 min-w-0 relative">
             {tree.loading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-gray-950/80 z-10">
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-950/80 z-10" data-testid="loading-indicator">
                 <div className="text-sm text-gray-400 animate-pulse">Loading tree...</div>
               </div>
             )}
 
             {tree.error && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-950 border border-red-800 rounded-lg p-3 z-10">
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-950 border border-red-800 rounded-lg p-3 z-10" data-testid="error-display">
                 <p className="text-sm text-red-400">{tree.error}</p>
               </div>
             )}
 
             {!selectedProjectId ? (
-              <div className="h-full flex items-center justify-center text-center">
+              <div className="h-full flex items-center justify-center text-center" data-testid="empty-state">
                 <div>
                   <div className="text-4xl mb-4">🌳</div>
                   <h3 className="text-lg font-semibold text-gray-300">Agent Tree Orchestrator</h3>
@@ -329,6 +694,10 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            ) : viewMode === 'registry' ? (
+              <ContractRegistry projectId={selectedProjectId} />
+            ) : viewMode === 'changes' ? (
+              <ContractChangesPanel />
             ) : viewMode === 'graph' || !tree.selectedNodeId ? (
               <div className="h-full">
                 <TreeGraph
@@ -376,6 +745,8 @@ export default function App() {
                 <button
                   key={node.id}
                   onClick={() => handleSelectNode(node.id)}
+                  data-testid="node-list-item"
+                  data-node-id={node.id}
                   className={`w-full text-left px-3 py-2 border-b border-gray-800 hover:bg-gray-800 transition-colors ${
                     tree.selectedNodeId === node.id ? 'bg-gray-800 border-l-2 border-blue-500' : ''
                   }`}

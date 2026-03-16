@@ -46,7 +46,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ logs, onClear, title
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-950 rounded-lg overflow-hidden border border-gray-800">
+    <div className="flex flex-col h-full bg-gray-950 rounded-lg overflow-hidden border border-gray-800" data-testid="execution-log">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-gray-900 border-b border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2">

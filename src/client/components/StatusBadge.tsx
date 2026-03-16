@@ -8,6 +8,7 @@ import { NodeStatus, NodeType } from '../types';
 interface StatusBadgeProps {
   status: NodeStatus;
   size?: 'sm' | 'md';
+  testId?: string;
 }
 
 const STATUS_CONFIG: Record<NodeStatus, { label: string; classes: string; dot: string }> = {
@@ -20,14 +21,17 @@ const STATUS_CONFIG: Record<NodeStatus, { label: string; classes: string; dot: s
   rejected:    { label: 'Rejected',     classes: 'bg-orange-950 text-orange-300 border-orange-700',     dot: 'bg-orange-400' },
 };
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
+export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md', testId }) => {
   const config = STATUS_CONFIG[status] || STATUS_CONFIG.pending;
   const sizeClasses = size === 'sm'
     ? 'text-xs px-1.5 py-0.5 gap-1'
     : 'text-xs px-2 py-1 gap-1.5';
 
   return (
-    <span className={`inline-flex items-center rounded-full border font-medium ${sizeClasses} ${config.classes}`}>
+    <span
+      className={`inline-flex items-center rounded-full border font-medium ${sizeClasses} ${config.classes}`}
+      {...(testId ? { 'data-testid': testId, 'data-status': status } : {})}
+    >
       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${config.dot}`} />
       {config.label}
     </span>
