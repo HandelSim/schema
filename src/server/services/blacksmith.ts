@@ -21,15 +21,19 @@ import {
 } from './project-store';
 import { broadcastGlobal } from '../utils/sse';
 
-// Import the Claude Agent SDK query function
+// Import the Claude Agent SDK query function.
+// Must use new Function to prevent TypeScript from compiling dynamic import()
+// to require(), which fails for ESM-only packages like claude-agent-sdk.
 let queryFn: any = null;
 async function getQuery() {
   if (!queryFn) {
     try {
-      const sdk = await import('@anthropic-ai/claude-agent-sdk');
+      const dynamicImport = new Function('m', 'return import(m)');
+      const sdk = await dynamicImport('@anthropic-ai/claude-agent-sdk');
       queryFn = sdk.query;
-    } catch {
-      console.warn('[Blacksmith] Claude Agent SDK not available');
+      console.log('[Blacksmith] Claude Agent SDK loaded, model:', process.env.SCHEMA_MODEL || 'sonnet');
+    } catch (e) {
+      console.warn('[Blacksmith] Claude Agent SDK not available:', (e as Error).message);
     }
   }
   return queryFn;

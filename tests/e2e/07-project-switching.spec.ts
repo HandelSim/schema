@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 test.describe("Project Switching", () => {
   test("switching between projects changes Blacksmith context", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Create project 1
     await page.click("[data-testid='create-project-button']");
@@ -50,7 +50,7 @@ test.describe("Project Switching", () => {
 
   test("project list shows both projects with correct data-project-id", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Create two projects
     for (const name of ["DataId Project A", "DataId Project B"]) {

@@ -9,7 +9,8 @@ import { sendBlacksmithMessage, getBlacksmithMessages } from "./helpers";
 test.describe("Blacksmith Conversation", () => {
   test("Blacksmith asks clarifying questions after project creation", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
 
     // Create project
     await page.click("[data-testid='create-project-button']");
@@ -22,7 +23,7 @@ test.describe("Blacksmith Conversation", () => {
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Todo App Project" }).click();
 
     // Wait for Blacksmith to become idle (first message may stream in)
-    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 30000 });
+    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Send an initial greeting to get clarifying questions
     await sendBlacksmithMessage(page, "Hello! I need help designing a todo list app with React and Express.");
@@ -39,7 +40,8 @@ test.describe("Blacksmith Conversation", () => {
 
   test("send answer and get follow-up", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
 
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Conversation Flow Test");
@@ -47,7 +49,7 @@ test.describe("Blacksmith Conversation", () => {
     await page.click("[data-testid='create-project-submit']");
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Conversation Flow Test" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Conversation Flow Test" }).click();
-    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 30000 });
+    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // First message
     await sendBlacksmithMessage(page, "I want to build a task management tool for remote teams.");

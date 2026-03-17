@@ -9,7 +9,7 @@ import { sendBlacksmithMessage } from "./helpers";
 test.describe("Persistence", () => {
   test("project persists after page refresh", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Create project
     await page.click("[data-testid='create-project-button']");
@@ -24,7 +24,7 @@ test.describe("Persistence", () => {
 
     // Full page refresh
     await page.reload();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Project should still be in list
     await expect(
@@ -43,7 +43,7 @@ test.describe("Persistence", () => {
 
   test("conversation history persists across page refresh", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "History Persist Project");
@@ -52,7 +52,7 @@ test.describe("Persistence", () => {
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "History Persist Project" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "History Persist Project" }).click();
 
-    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 30000 });
+    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Send a message
     await sendBlacksmithMessage(page, "Remember this: the secret codeword is PERSISTENCE.");
@@ -72,7 +72,7 @@ test.describe("Persistence", () => {
 
     // Page refresh
     await page.reload();
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Re-select project
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "History Persist Project" }).click();
@@ -85,7 +85,7 @@ test.describe("Persistence", () => {
 
   test("blacksmith-session.json is created with project", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Session File Project");

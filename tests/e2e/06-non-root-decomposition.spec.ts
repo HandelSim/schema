@@ -9,7 +9,7 @@ import { sendBlacksmithMessage } from "./helpers";
 test.describe("Non-Root Decomposition", () => {
   test("clicking Approve on a non-leaf node triggers Blacksmith", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Create project with a non-leaf root node
     await page.click("[data-testid='create-project-button']");
@@ -18,7 +18,7 @@ test.describe("Non-Root Decomposition", () => {
     await page.click("[data-testid='create-project-submit']");
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Non-Root Decomp Project" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Non-Root Decomp Project" }).click();
-    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 30000 });
+    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Get project ID
     const projectItem = page.locator("[data-testid='project-list-item']").filter({ hasText: "Non-Root Decomp Project" });

@@ -78,34 +78,21 @@ export const BlacksmithTerminal: React.FC<BlacksmithTerminalProps> = ({ projectI
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            continue; // handled with data
-          }
-          if (line.startsWith('data: ')) {
-            const raw = line.slice(6);
-            try {
-              const parsed = JSON.parse(raw) as { content?: string; tool?: string };
-              if (line.includes('"content"')) {
-                accumulatedText += parsed.content || '';
-                setStreamingContent(accumulatedText);
-              } else if (line.includes('"tool"') && parsed.tool) {
-                setToolInProgress(parsed.tool);
-              }
-            } catch {}
-          }
-        }
+        // SSE events are separated by \n\n
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
 
-        // Parse event+data pairs properly
-        const fullText = decoder.decode(value);
-        const eventMatches = fullText.matchAll(/event: (\w+)\ndata: (.+)/g);
-        for (const match of eventMatches) {
-          const [, eventType, dataStr] = match;
+        for (const part of parts) {
+          let eventType = 'message';
+          let dataStr = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dataStr = line.slice(6);
+          }
+          if (!dataStr) continue;
           try {
-            const data = JSON.parse(dataStr) as { content?: string; tool?: string };
+            const data = JSON.parse(dataStr) as { content?: string; tool?: string; error?: string };
             if (eventType === 'text' && data.content) {
               accumulatedText += data.content;
               setStreamingContent(accumulatedText);
@@ -114,8 +101,12 @@ export const BlacksmithTerminal: React.FC<BlacksmithTerminalProps> = ({ projectI
               setToolInProgress(data.tool);
             } else if (eventType === 'done') {
               setToolInProgress(null);
+            } else if (eventType === 'error') {
+              throw new Error(data.error || 'Blacksmith error');
             }
-          } catch {}
+          } catch (e) {
+            if ((e as Error).message?.includes('Blacksmith error') || (e as Error).message?.includes('error')) throw e;
+          }
         }
       }
 

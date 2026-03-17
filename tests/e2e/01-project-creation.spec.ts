@@ -8,7 +8,8 @@ test.describe("Project Creation", () => {
     const errors: string[] = [];
     page.on("console", msg => { if (msg.type() === "error") errors.push(msg.text()); });
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
     await expect(page.locator("body")).toBeVisible();
     const critical = errors.filter(e => !e.includes("favicon") && !e.includes("404"));
     expect(critical.length).toBe(0);
@@ -16,13 +17,14 @@ test.describe("Project Creation", () => {
 
   test("project list is visible in left panel", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
-    await expect(page.locator("[data-testid='project-list']")).toBeVisible();
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
   });
 
   test("creating a project shows tree and Blacksmith", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Test Project Alpha");
     await page.fill("[data-testid='project-prompt-input']", "Build a simple task manager web app");
@@ -36,7 +38,8 @@ test.describe("Project Creation", () => {
 
   test("Blacksmith is default right panel tab", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Tab Test Project");
     await page.fill("[data-testid='project-prompt-input']", "Test tab visibility");
@@ -48,7 +51,8 @@ test.describe("Project Creation", () => {
 
   test("center panel has Tree tab visible by default", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible({ timeout: 10000 });
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Center Tab Project");
     await page.fill("[data-testid='project-prompt-input']", "Test center tab");

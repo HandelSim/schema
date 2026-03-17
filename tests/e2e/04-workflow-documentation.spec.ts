@@ -9,7 +9,7 @@ import { sendBlacksmithMessage } from "./helpers";
 test.describe("Workflow Documentation", () => {
   test("Blacksmith can document workflows", async ({ page }) => {
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     await page.click("[data-testid='create-project-button']");
     await page.fill("[data-testid='project-name-input']", "Workflow Doc Project");
@@ -17,7 +17,7 @@ test.describe("Workflow Documentation", () => {
     await page.click("[data-testid='create-project-submit']");
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Workflow Doc Project" }).waitFor({ timeout: 10000 });
     await page.locator("[data-testid='project-list-item']").filter({ hasText: "Workflow Doc Project" }).click();
-    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 30000 });
+    await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Request workflow documentation
     await sendBlacksmithMessage(page,
