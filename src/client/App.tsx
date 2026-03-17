@@ -197,7 +197,10 @@ export default function App() {
   const handleApproveNode = useCallback(async (nodeId: string, decompose: boolean) => {
     await tree.approveNode(nodeId, decompose);
     if (decompose) {
+      // Switch to tree so user can watch nodes appear, and show Blacksmith panel
+      // so they see the decomposition conversation in real time.
       setCenterTab('tree');
+      setRightTab('blacksmith');
     }
   }, [tree]);
 

@@ -4,6 +4,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BlacksmithMessage, BlacksmithStatus } from '../types';
+import { useSSE } from '../hooks/useSSE';
 
 interface BlacksmithTerminalProps {
   projectId: string | null;
@@ -20,7 +21,7 @@ export const BlacksmithTerminal: React.FC<BlacksmithTerminalProps> = ({ projectI
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Load history when project changes
-  useEffect(() => {
+  const loadHistory = useCallback(() => {
     if (!projectId) {
       setMessages([]);
       return;
@@ -32,6 +33,60 @@ export const BlacksmithTerminal: React.FC<BlacksmithTerminalProps> = ({ projectI
       })
       .catch(() => setMessages([]));
   }, [projectId]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  // Track externally-triggered streaming (e.g. from approve & decompose)
+  const externalStreamRef = useRef('');
+
+  // Subscribe to global SSE events so that server-triggered decomposition
+  // (from approve & decompose) is reflected live in the terminal.
+  useSSE('/api/events', {
+    onMessage: (event, data) => {
+      const d = data as Record<string, unknown>;
+
+      if (event === 'blacksmith:status') {
+        const { status: s } = d as { status: BlacksmithStatus };
+        // Only update status from SSE when we're not already handling a
+        // user-initiated request (to avoid race conditions).
+        setStatus(prev => {
+          if (prev === 'idle' || s === 'idle') return s;
+          return s; // always trust server
+        });
+        if (s === 'idle') {
+          // Finalize any externally-accumulated streaming message
+          if (externalStreamRef.current) {
+            const assistantMsg: BlacksmithMessage = {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: externalStreamRef.current,
+              timestamp: new Date().toISOString(),
+            };
+            setMessages(prev => [...prev, assistantMsg]);
+            externalStreamRef.current = '';
+            setStreamingContent('');
+          }
+        }
+      } else if (event === 'blacksmith:text') {
+        const { content } = d as { content: string };
+        if (content) {
+          externalStreamRef.current += content;
+          setStreamingContent(externalStreamRef.current);
+          setToolInProgress(null);
+        }
+      } else if (event === 'blacksmith:tool_use') {
+        const { tool } = d as { tool?: string };
+        if (tool) setToolInProgress(tool);
+      } else if (event === 'blacksmith:decomposed') {
+        // After decomposition completes, reload history to show the full exchange
+        externalStreamRef.current = '';
+        setStreamingContent('');
+        loadHistory();
+      }
+    },
+  });
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -53,6 +108,7 @@ export const BlacksmithTerminal: React.FC<BlacksmithTerminalProps> = ({ projectI
     setStatus('thinking');
     setStreamingContent('');
     setToolInProgress(null);
+    externalStreamRef.current = ''; // Clear any externally streamed content
 
     abortControllerRef.current = new AbortController();
 
