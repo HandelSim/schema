@@ -22,6 +22,7 @@ interface UseTreeReturn extends TreeState {
   addLog: (entry: Omit<LogEntry, 'id'>) => void;
   clearLogs: () => void;
   refreshTree: () => void;
+  hasMockup: boolean;
   // Node operations
   approveNode: (nodeId: string, decompose?: boolean) => Promise<void>;
   updateNode: (nodeId: string, updates: Partial<TreeNode>) => Promise<void>;
@@ -37,6 +38,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
     error: null,
   });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hasMockup, setHasMockup] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logIdCounter = useRef(0);
 
@@ -56,7 +58,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
     try {
       const response = await fetch(`/api/projects/${projectId}/tree`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json() as { project: Project; nodes: TreeNode[]; contracts: ContractRecord[] };
+      const data = await response.json() as { project: Project; nodes: TreeNode[]; contracts: ContractRecord[]; mockup_path?: string | null };
       setState({
         project: data.project,
         nodes: data.nodes || [],
@@ -64,6 +66,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
         loading: false,
         error: null,
       });
+      setHasMockup(!!data.mockup_path);
       // Auto-select root node if nothing is selected yet
       setSelectedNodeId(prev => {
         if (prev) return prev;
@@ -79,6 +82,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
   useEffect(() => {
     fetchTree();
     setSelectedNodeId(null);
+    setHasMockup(false);
   }, [fetchTree, projectId]);
 
   // Handle SSE events for real-time updates
@@ -139,6 +143,8 @@ export function useTree(projectId: string | null): UseTreeReturn {
       } else if (event === 'blacksmith:decomposed') {
         // Refresh tree after decomposition
         setTimeout(fetchTree, 500);
+      } else if (event === 'blacksmith:mockup') {
+        setHasMockup(true);
       }
     },
     onOpen: () => {
@@ -206,6 +212,7 @@ export function useTree(projectId: string | null): UseTreeReturn {
     addLog,
     clearLogs,
     refreshTree: fetchTree,
+    hasMockup,
     approveNode,
     updateNode,
     deleteNode,

@@ -105,6 +105,7 @@ export function getProjectFilePath(projectId: string): string {
 
 function defaultProjectFile(projectId: string, name: string, prompt: string): ProjectFile {
   const now = new Date().toISOString();
+  const rootNodeId = uuidv4();
   return {
     project: {
       id: projectId,
@@ -114,7 +115,28 @@ function defaultProjectFile(projectId: string, name: string, prompt: string): Pr
       created_at: now,
       updated_at: now,
     },
-    nodes: [],
+    nodes: [{
+      id: rootNodeId,
+      parent_id: null,
+      name,
+      depth: 0,
+      status: 'pending',
+      is_leaf: false,
+      prompt,
+      model: (process.env.SCHEMA_MODEL as any) || 'sonnet',
+      hooks: {},
+      mcp_servers: {},
+      subagents: {},
+      acceptance_criteria: '',
+      contracts_provided: [],
+      contracts_consumed: [],
+      session_id: null,
+      cost_usd: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      started_at: null,
+      completed_at: null,
+    }],
     contracts: [],
     stakeholder: {
       clarifications: [],
@@ -291,12 +313,14 @@ export function getProjectTree(projectId: string): {
   project: ProjectData;
   nodes: NodeRecord[];
   contracts: ContractRecord[];
+  mockup_path: string | null;
 } {
   const data = readProjectFile(projectId);
   return {
     project: data.project,
     nodes: data.nodes,
     contracts: data.contracts,
+    mockup_path: data.stakeholder?.mockup_path || null,
   };
 }
 

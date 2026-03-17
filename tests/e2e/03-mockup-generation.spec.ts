@@ -15,8 +15,8 @@ test.describe("Mockup Generation", () => {
     await page.fill("[data-testid='project-name-input']", "Mockup Test Project");
     await page.fill("[data-testid='project-prompt-input']", "Build a simple note-taking app");
     await page.click("[data-testid='create-project-submit']");
-    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project" }).waitFor({ timeout: 10000 });
-    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project" }).click();
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project"  }).first().waitFor({ timeout: 10000 });
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project"  }).first().click();
     await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Request mockup directly
@@ -26,7 +26,7 @@ test.describe("Mockup Generation", () => {
     );
 
     // Get the project ID from the list item
-    const projectItem = page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project" });
+    const projectItem = page.locator("[data-testid='project-list-item']").filter({ hasText: "Mockup Test Project" }).first();
     const projectId = await projectItem.getAttribute("data-project-id");
 
     if (projectId) {

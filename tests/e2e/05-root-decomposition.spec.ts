@@ -15,8 +15,8 @@ test.describe("Root Decomposition", () => {
     await page.fill("[data-testid='project-name-input']", "Decomposition Test Project");
     await page.fill("[data-testid='project-prompt-input']", "Build a blog platform with posts, comments, and user auth");
     await page.click("[data-testid='create-project-submit']");
-    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project" }).waitFor({ timeout: 10000 });
-    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project" }).click();
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project"  }).first().waitFor({ timeout: 10000 });
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project"  }).first().click();
     await page.waitForSelector("[data-testid='blacksmith-status'][data-status='idle']", { timeout: 120000 });
 
     // Request decomposition with explicit JSON format
@@ -37,7 +37,7 @@ test.describe("Root Decomposition", () => {
     );
 
     // Get project ID
-    const projectItem = page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project" });
+    const projectItem = page.locator("[data-testid='project-list-item']").filter({ hasText: "Decomposition Test Project" }).first();
     const projectId = await projectItem.getAttribute("data-project-id");
 
     if (projectId) {

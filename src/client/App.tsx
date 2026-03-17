@@ -54,7 +54,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
               onChange={e => setName(e.target.value)}
               placeholder="e.g. E-commerce Platform v2"
               required
-              data-testid="project-name"
+              data-testid="project-name-input"
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -66,7 +66,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
               placeholder="Be as descriptive as possible — include tech stack, constraints, and end goals."
               rows={6}
               required
-              data-testid="project-prompt"
+              data-testid="project-prompt-input"
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
             />
           </div>
@@ -74,7 +74,7 @@ const CreateProjectModal: React.FC<CreateProjectModalProps> = ({ onClose, onCrea
             <button
               type="submit"
               disabled={loading || !name.trim() || !prompt.trim()}
-              data-testid="create-project"
+              data-testid="create-project-submit"
               className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
             >
               {loading ? 'Creating...' : 'Create Project'}
@@ -113,7 +113,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({ projects, selectedId, o
         </h1>
         <button
           onClick={onCreate}
-          data-testid="new-project-button"
+          data-testid="create-project-button"
           className="text-xs px-2 py-1 bg-blue-600 rounded hover:bg-blue-700 text-white"
         >
           + New
@@ -214,8 +214,7 @@ export default function App() {
     ...nodeLogs.filter(l => !tree.logs.some(tl => tl.id === l.id)),
   ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-  // Future: derive hasMockup from project data when mockup support is added
-  const hasMockup = false;
+  const hasMockup = tree.hasMockup;
 
   return (
     <div className="h-screen flex overflow-hidden bg-gray-950 font-sans">
@@ -345,8 +344,13 @@ export default function App() {
               )}
             </div>
           ) : centerTab === 'mockup' ? (
-            <div className="h-full flex items-center justify-center">
-              <p className="text-sm text-gray-500">No mockup available yet.</p>
+            <div className="h-full">
+              <iframe
+                src={`/api/projects/${selectedProjectId}/mockup`}
+                className="w-full h-full border-0"
+                title="Project Mockup"
+                data-testid="mockup-iframe"
+              />
             </div>
           ) : centerTab === 'node-detail' ? (
             selectedNode ? (
