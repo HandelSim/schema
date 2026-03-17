@@ -182,17 +182,30 @@ function buildDecompositionPrompt(
 
   return `You are a senior software architect performing recursive project decomposition for SCHEMA, a multi-agent software development orchestrator.
 
-Each node you create becomes a HAMMER agent — a Claude Code instance with specific tool access, file path boundaries, hooks, and acceptance criteria. Your configs must be precise and grounded in what HAMMER actually supports.
+**CRITICAL: This tree graph represents a project FILE STRUCTURE. Every node is a DIRECTORY. The component names you choose become directory names in the project. The full path of a node is built by joining its ancestors: e.g. root/backend/api. Design the tree as you would design a real project directory hierarchy.**
+
+Each directory/node becomes a HAMMER agent — a Claude Code instance scoped to that directory, with specific tool access, file path boundaries, hooks, and acceptance criteria. Your configs must be precise and grounded in what HAMMER actually supports.
 
 ## Project Context
 - Project specification: ${projectSpec}
-- Parent node name: ${node.name}
-- Parent node prompt: ${node.prompt || '(none)'}
-- Parent node role: ${node.role || 'Software Engineer'}
+- Parent directory (node) name: ${node.name}
+- Parent directory prompt/purpose: ${node.prompt || '(none)'}
+- Parent directory role: ${node.role || 'Software Engineer'}
 - Current depth: ${node.depth}${depthNote}
 
-## Existing Contracts (shared interfaces between siblings)
+## Existing Contracts (shared interfaces between sibling directories)
 ${contractsContent}
+
+---
+
+## DIRECTORY STRUCTURE RULES
+- Component names MUST be valid directory names (lowercase, hyphens, no spaces)
+- Each component represents a real subdirectory that will exist in the project
+- allowed_paths for each node should be the directory path relative to the project root
+- Think like a file system: src/, tests/, docs/, api/, lib/, config/ etc.
+- Children of a node live inside that node's directory
+- Leaf nodes are the actual implementation directories — files get written there
+- Orchestrator nodes are parent directories that contain child directories
 
 ---
 
@@ -231,15 +244,15 @@ ALWAYS use "haiku" — all agent nodes run claude-haiku-4-5-20251001. This is en
 ---
 
 ## Decomposition Rules
-1. Each sub-component should be a coherent unit of work (1-2 developer sessions max for leaves)
-2. Define explicit file path boundaries (allowed_paths) — keep them narrow and non-overlapping
+1. Each sub-directory should be a coherent unit of work (1-2 developer sessions max for leaves)
+2. Define explicit file path boundaries (allowed_paths) matching the actual directory path
 3. Include exactly one test/integration sibling at each level (suffix: "-tests" or "-testing")
-4. Set is_leaf: true when the task is small enough for one focused developer session
+4. Set is_leaf: true when the directory contains final implementation files (no subdirectories)
 5. Write acceptance_criteria as measurable, verifiable completion criteria (not vague goals)
 6. Leave hooks:{} unless you have a specific reason to override the node-type defaults
-7. List dependencies by component name — these control execution order
+7. List dependencies by directory name — these control execution order
 8. Include contracts for any shared TypeScript interfaces, API specs, or data schemas
-9. Add context7 to mcp_tools for any node that will use third-party libraries
+9. Add context7 to mcp_tools for any directory that will use third-party libraries
 10. Assign testing_tier: "tier3" ONLY to integration-test nodes that run after siblings complete
 
 ## Output Format

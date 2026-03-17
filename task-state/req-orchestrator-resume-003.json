@@ -1,0 +1,11 @@
+{
+  "request_id": "req-orchestrator-resume-003",
+  "task": "Complete the remaining Agent Tree Orchestrator fixes at /scrolls/kingdom-forge-orchestrator/. Git pull first to sync.\n\nALREADY DONE AND COMMITTED — do NOT touch:\n1. Status: pending → Awaiting Approval (StatusBadge.tsx)\n2. System prompt field removed from project dialog\n3. Auto-select root node after creation\n4. Header: ATO → Agent Tree Orchestrator\n5. Approve buttons merged into one adaptive button\n6. TypeBadge: Orchestrator → Composite\n7. Playwright tests (5 tests, workflow.spec.js)\n\nNEEDS DOIN",
+  "started_at": "2026-03-15T16:58:34.655Z",
+  "status": "completed",
+  "completed_steps": [
+    "A) is_leaf checkbox in ConfigAccordion - committed and pushed",
+    "B) Auto-generate initial node with Claude on project creation - committed and pushed",
+    "C) Manual/Auto mode toggle with recursive decomposition - committed and pushed"
+  ]
+}

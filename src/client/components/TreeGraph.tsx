@@ -5,7 +5,7 @@
  * We don't use a library like dagre here to keep the bundle lean.
  * The layout positions nodes in a breadth-first manner with configurable spacing.
  */
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -19,10 +19,11 @@ import ReactFlow, {
   Position,
   MarkerType,
   BackgroundVariant,
+  ReactFlowInstance,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { TreeNode } from '../types';
-import { StatusBadge, TypeBadge } from './StatusBadge';
+import { StatusBadge } from './StatusBadge';
 
 // Node dimensions for layout calculation
 const NODE_WIDTH = 200;
@@ -35,20 +36,18 @@ const STATUS_NODE_STYLES: Record<string, { bg: string; border: string; ring: str
   pending:     { bg: 'bg-gray-800',    border: 'border-gray-600',   ring: 'ring-gray-500' },
   approved:    { bg: 'bg-blue-950',    border: 'border-blue-600',   ring: 'ring-blue-500' },
   decomposing: { bg: 'bg-yellow-950',  border: 'border-yellow-600', ring: 'ring-yellow-500' },
-  running:     { bg: 'bg-emerald-950', border: 'border-emerald-600',ring: 'ring-emerald-500' },
+  executing:   { bg: 'bg-emerald-950', border: 'border-emerald-600', ring: 'ring-emerald-500' },
   completed:   { bg: 'bg-green-950',   border: 'border-green-600',  ring: 'ring-green-500' },
   failed:      { bg: 'bg-red-950',     border: 'border-red-600',    ring: 'ring-red-500' },
-  rejected:    { bg: 'bg-orange-950',  border: 'border-orange-600', ring: 'ring-orange-500' },
 };
 
 const STATUS_MINIMAP_COLORS: Record<string, string> = {
   pending:     '#9ca3af',
   approved:    '#3b82f6',
   decomposing: '#eab308',
-  running:     '#10b981',
+  executing:   '#10b981',
   completed:   '#22c55e',
   failed:      '#ef4444',
-  rejected:    '#f97316',
 };
 
 /**
@@ -73,7 +72,7 @@ const AgentNode: React.FC<NodeProps> = ({ data }) => {
         relative w-[200px] rounded-lg border-2 p-2.5 cursor-pointer transition-all
         ${style.bg} ${style.border}
         ${selected ? `ring-2 ring-offset-1 ${style.ring} shadow-lg scale-105` : 'hover:shadow-md hover:scale-102'}
-        ${node.status === 'running' || node.status === 'decomposing' ? 'animate-pulse-slow' : ''}
+        ${node.status === 'executing' || node.status === 'decomposing' ? 'animate-pulse-slow' : ''}
       `}
     >
       <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-gray-400" />
@@ -82,14 +81,8 @@ const AgentNode: React.FC<NodeProps> = ({ data }) => {
         <div className="font-semibold text-xs text-gray-100 truncate leading-tight" title={node.name}>
           {node.name}
         </div>
-        {node.role && (
-          <div className="text-xs text-gray-400 truncate" title={node.role}>
-            {node.role}
-          </div>
-        )}
         <div className="flex items-center gap-1 flex-wrap">
           <StatusBadge status={node.status} size="sm" />
-          <TypeBadge type={node.node_type} />
         </div>
       </div>
 
@@ -101,37 +94,59 @@ const AgentNode: React.FC<NodeProps> = ({ data }) => {
 const nodeTypes = { agentNode: AgentNode };
 
 /**
- * Compute a hierarchical tree layout.
- * Groups nodes by depth, distributes horizontally with equal spacing.
+ * Compute a hierarchical tree layout using a recursive subtree-width algorithm.
+ *
+ * Each node is centered over its children's combined footprint, and sibling
+ * subtrees are placed side-by-side without overlap. This guarantees that
+ * parent-child edges never cross sibling edges — every connection is visually
+ * unambiguous regardless of how wide the tree grows.
  */
 function computeTreeLayout(nodes: TreeNode[]): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
-
   if (nodes.length === 0) return positions;
 
-  // Group by depth
-  const byDepth = new Map<number, TreeNode[]>();
+  // Build parent → children map
+  const childrenOf = new Map<string | null, TreeNode[]>();
   for (const node of nodes) {
-    const level = byDepth.get(node.depth) || [];
-    level.push(node);
-    byDepth.set(node.depth, level);
+    const pid = node.parent_id ?? null;
+    if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+    childrenOf.get(pid)!.push(node);
   }
 
-  const maxDepth = Math.max(...byDepth.keys());
+  // Width (in px) that the subtree rooted at this node occupies.
+  // A leaf needs exactly one slot; a parent needs the sum of its children's widths.
+  function subtreeWidth(node: TreeNode): number {
+    const children = childrenOf.get(node.id) ?? [];
+    if (children.length === 0) return NODE_WIDTH + H_SPACING;
+    return children.reduce((sum, c) => sum + subtreeWidth(c), 0);
+  }
 
-  // Bottom-up layout: compute subtree widths and position accordingly
-  // Simple approach: divide horizontal space evenly per depth level
-  for (let depth = 0; depth <= maxDepth; depth++) {
-    const levelNodes = byDepth.get(depth) || [];
-    const totalWidth = levelNodes.length * (NODE_WIDTH + H_SPACING) - H_SPACING;
-    const startX = -totalWidth / 2;
+  // Recursively assign positions.
+  // `left` is the left edge of the horizontal band allocated to this subtree.
+  function assign(node: TreeNode, left: number, depth: number): void {
+    const children = childrenOf.get(node.id) ?? [];
+    const sw = subtreeWidth(node);
 
-    levelNodes.forEach((node, i) => {
-      positions.set(node.id, {
-        x: startX + i * (NODE_WIDTH + H_SPACING),
-        y: depth * (NODE_HEIGHT + V_SPACING),
-      });
+    // Center the node over its allocated band
+    positions.set(node.id, {
+      x: left + sw / 2 - NODE_WIDTH / 2,
+      y: depth * (NODE_HEIGHT + V_SPACING),
     });
+
+    // Lay children out left-to-right, each in its own band
+    let childLeft = left;
+    for (const child of children) {
+      assign(child, childLeft, depth + 1);
+      childLeft += subtreeWidth(child);
+    }
+  }
+
+  // Support forests (multiple roots), though SCHEMA always has one
+  const roots = childrenOf.get(null) ?? [];
+  let rootLeft = 0;
+  for (const root of roots) {
+    assign(root, rootLeft, 0);
+    rootLeft += subtreeWidth(root);
   }
 
   return positions;
@@ -150,6 +165,8 @@ export const TreeGraph: React.FC<TreeGraphProps> = ({
 }) => {
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState([]);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
+  const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
+  const prevRootIdRef = useRef<string | null>(null);
 
   // Build React Flow nodes and edges from tree data
   const { rfNodes, rfEdges } = useMemo(() => {
@@ -217,6 +234,40 @@ export const TreeGraph: React.FC<TreeGraphProps> = ({
     setFlowEdges(rfEdges);
   }, [rfEdges, setFlowEdges]);
 
+  // Reset viewport when the project changes (root node switches)
+  const rootNode = nodes.find(n => !n.parent_id);
+  useEffect(() => {
+    const rootId = rootNode?.id ?? null;
+    if (rootId !== prevRootIdRef.current) {
+      prevRootIdRef.current = rootId;
+      if (rfInstance && rootId !== null) {
+        setTimeout(() => rfInstance.fitView({ padding: 0.2 }), 50);
+      }
+    }
+  }, [rootNode?.id, rfInstance]);
+
+  // Re-fit the viewport whenever nodes are added (decomposition expanded the tree)
+  const prevNodeCountRef = useRef(0);
+  useEffect(() => {
+    if (rfInstance && nodes.length > prevNodeCountRef.current) {
+      // Delay lets React Flow finish positioning the new nodes before fitting
+      setTimeout(() => rfInstance.fitView({ padding: 0.25, duration: 400 }), 100);
+    }
+    prevNodeCountRef.current = nodes.length;
+  }, [nodes.length, rfInstance]);
+
+  // Compute translate extent to prevent panning away from the graph
+  const translateExtent = useMemo((): [[number, number], [number, number]] | undefined => {
+    if (rfNodes.length === 0) return undefined;
+    const xs = rfNodes.map(n => n.position.x);
+    const ys = rfNodes.map(n => n.position.y);
+    const buffer = 600;
+    return [
+      [Math.min(...xs) - buffer, Math.min(...ys) - buffer],
+      [Math.max(...xs) + NODE_WIDTH + buffer, Math.max(...ys) + NODE_HEIGHT + buffer],
+    ];
+  }, [rfNodes]);
+
   const getMinimapNodeColor = useCallback((node: Node) => {
     const treeNode = nodes.find(n => n.id === node.id);
     return STATUS_MINIMAP_COLORS[treeNode?.status || 'pending'] || '#9ca3af';
@@ -230,10 +281,12 @@ export const TreeGraph: React.FC<TreeGraphProps> = ({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
+        onInit={setRfInstance}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
         maxZoom={2}
+        translateExtent={translateExtent}
         defaultEdgeOptions={{ type: 'smoothstep' }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e293b" />

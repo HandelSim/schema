@@ -1,22 +1,16 @@
 /**
- * NodeDetail - The central panel for viewing and editing a selected node.
- * Shows all node properties and provides action buttons for the node lifecycle.
+ * NodeDetail - The panel for viewing and editing a selected node.
+ * Shows simplified node properties matching the new NodeRecord schema.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { TreeNode, Contract } from '../types';
-import { StatusBadge, TypeBadge } from './StatusBadge';
-import { PromptEditor } from './PromptEditor';
-import { ConfigAccordion } from './ConfigAccordion';
-import { ContractEditor } from './ContractEditor';
+import { TreeNode, ContractRecord } from '../types';
+import { StatusBadge } from './StatusBadge';
 
 interface NodeDetailProps {
   node: TreeNode;
   allNodes: TreeNode[];
-  contracts: Contract[];
+  contracts: ContractRecord[];
   onApprove: (nodeId: string, decompose: boolean) => Promise<void>;
-  onReject: (nodeId: string, feedback?: string) => Promise<void>;
-  onExecute: (nodeId: string) => Promise<void>;
-  onVerify: (nodeId: string) => Promise<void>;
   onUpdate: (nodeId: string, updates: Partial<TreeNode>) => Promise<void>;
   onDelete: (nodeId: string) => Promise<void>;
 }
@@ -26,9 +20,6 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
   allNodes,
   contracts,
   onApprove,
-  onReject,
-  onExecute,
-  onVerify,
   onUpdate,
   onDelete,
 }) => {
@@ -36,18 +27,14 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
   const [draftNode, setDraftNode] = useState<TreeNode>(node);
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [rejectFeedback, setRejectFeedback] = useState('');
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'config' | 'contracts' | 'children'>('config');
+  const [activeTab, setActiveTab] = useState<'prompt' | 'contracts' | 'children'>('prompt');
 
-  // Reset draft when selected node changes
   useEffect(() => {
     setDraftNode(node);
     setEditing(false);
   }, [node.id, node]);
 
   const children = allNodes.filter(n => n.parent_id === node.id);
-  const nodeContracts = contracts.filter(c => c.parent_node_id === node.id);
 
   const handleAction = useCallback(async (action: string, fn: () => Promise<void>) => {
     setActionLoading(action);
@@ -76,28 +63,11 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
     setDraftNode(prev => ({ ...prev, ...updates }));
   };
 
-  const isRunning = node.status === 'running' || node.status === 'decomposing';
-  const canApprove = ['pending', 'rejected', 'failed'].includes(node.status);
-  const canExecute = node.node_type !== 'orchestrator' && ['approved', 'failed'].includes(node.status);
-  const canEdit = ['pending', 'approved', 'failed', 'rejected'].includes(node.status);
+  const isRunning = node.status === 'executing' || node.status === 'decomposing';
+  const canApprove = ['pending', 'failed'].includes(node.status);
+  const canEdit = ['pending', 'approved', 'failed'].includes(node.status);
 
   const displayNode = editing ? draftNode : node;
-
-  const handleContractUpdate = async (contractId: string, content: string) => {
-    await fetch(`/api/contracts/${contractId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-  };
-
-  const handleContractCreate = async (name: string, content: string) => {
-    await fetch('/api/contracts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parent_node_id: node.id, name, content }),
-    });
-  };
 
   return (
     <div className="h-full flex flex-col bg-gray-800 overflow-hidden" data-testid="node-detail-panel">
@@ -105,14 +75,16 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
       <div className="px-4 py-3 border-b border-gray-700 flex-shrink-0">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-gray-100 truncate" data-testid="node-name">{node.name}</h2>
+            <h2 className="text-base font-semibold text-gray-100 truncate" data-testid="node-name">
+              {node.name}
+            </h2>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <StatusBadge status={node.status} testId="node-status" />
-              <TypeBadge type={node.node_type} />
-              {node.role && (
-                <span className="text-xs text-gray-400 italic">{node.role}</span>
-              )}
+              <span className={`text-xs px-1.5 py-0.5 rounded ${node.is_leaf ? 'bg-emerald-900 text-emerald-300' : 'bg-blue-900 text-blue-300'}`}>
+                {node.is_leaf ? 'leaf' : 'orchestrator'}
+              </span>
               <span className="text-xs text-gray-500" data-testid="node-depth">Depth: {node.depth}</span>
+              <span className="text-xs text-gray-500">Model: {node.model}</span>
             </div>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -154,65 +126,36 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
             {node.completed_at && <span>Completed: {new Date(node.completed_at).toLocaleString()}</span>}
           </div>
         )}
+
+        {/* Cost info */}
+        {node.cost_usd > 0 && (
+          <div className="text-xs text-gray-500 mt-1">
+            Cost: ${node.cost_usd.toFixed(4)} · {node.input_tokens + node.output_tokens} tokens
+          </div>
+        )}
       </div>
 
       {/* Action buttons */}
       <div className="px-4 py-2 border-b border-gray-700 flex gap-2 flex-wrap flex-shrink-0 bg-gray-900">
         {canApprove && (
           <button
-            onClick={() => {
-              const isLeaf = node.node_type === 'leaf';
-              handleAction('approve', () => onApprove(node.id, !isLeaf));
-            }}
+            onClick={() => handleAction('approve', () => onApprove(node.id, !node.is_leaf))}
             disabled={!!actionLoading || isRunning}
             data-testid="approve-button"
             className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 font-medium"
           >
             {actionLoading === 'approve'
               ? '...'
-              : node.node_type === 'leaf'
+              : node.is_leaf
                 ? '✓ Approve'
                 : '🔱 Approve & Decompose'}
           </button>
         )}
 
-        {canExecute && (
-          <button
-            onClick={() => handleAction('execute', () => onExecute(node.id))}
-            disabled={!!actionLoading}
-            data-testid="execute-button"
-            className="text-xs px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 font-medium"
-          >
-            {actionLoading === 'execute' ? '...' : '▶ Execute'}
-          </button>
-        )}
-
         {isRunning && (
           <span data-testid="decomposing-indicator" className="text-xs px-3 py-1.5 text-yellow-300 bg-yellow-950 rounded font-medium animate-pulse">
-            ⏳ {node.status === 'decomposing' ? 'Decomposing...' : 'Running...'}
+            ⏳ {node.status === 'decomposing' ? 'Decomposing...' : 'Executing...'}
           </span>
-        )}
-
-        {node.status === 'completed' && (
-          <button
-            onClick={() => handleAction('verify', () => onVerify(node.id))}
-            disabled={!!actionLoading}
-            data-testid="verify-button"
-            className="text-xs px-3 py-1.5 rounded bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 font-medium"
-          >
-            {actionLoading === 'verify' ? '...' : '✓ Verify'}
-          </button>
-        )}
-
-        {canApprove && (
-          <button
-            onClick={() => setShowRejectModal(true)}
-            disabled={!!actionLoading || isRunning}
-            data-testid="reject-button"
-            className="text-xs px-3 py-1.5 rounded border border-red-800 text-red-400 hover:bg-red-950 disabled:opacity-50"
-          >
-            ✕ Reject
-          </button>
         )}
 
         <button
@@ -228,71 +171,11 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
         </button>
       </div>
 
-      {/* Reject modal */}
-      {showRejectModal && (
-        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 w-80 shadow-xl">
-            <h3 className="font-semibold text-gray-100 mb-3">Reject Node</h3>
-            <textarea
-              value={rejectFeedback}
-              onChange={e => setRejectFeedback(e.target.value)}
-              placeholder="Reason for rejection (optional)..."
-              rows={4}
-              data-testid="rejection-feedback"
-              className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded p-2 mb-3 focus:outline-none focus:ring-1 focus:ring-red-500 placeholder-gray-500"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setShowRejectModal(false);
-                  handleAction('reject', () => onReject(node.id, rejectFeedback));
-                }}
-                data-testid="rejection-confirm"
-                className="flex-1 text-sm py-2 bg-red-600 text-white rounded hover:bg-red-700"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => setShowRejectModal(false)}
-                className="flex-1 text-sm py-2 border border-gray-600 text-gray-300 rounded hover:bg-gray-700"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        {/* Prompt */}
-        <div className="px-4 py-3 border-b border-gray-700" data-testid="node-prompt">
-          <PromptEditor
-            value={displayNode.prompt || ''}
-            onChange={v => editing && updateDraft({ prompt: v })}
-            readOnly={!editing}
-            label="Task Prompt"
-            rows={5}
-          />
-        </div>
-
-        {/* Role */}
-        <div className="px-4 py-2 border-b border-gray-700">
-          <label className="block text-xs font-medium text-gray-400 mb-1">Role</label>
-          <input
-            type="text"
-            value={displayNode.role || ''}
-            onChange={e => editing && updateDraft({ role: e.target.value })}
-            readOnly={!editing}
-            placeholder="e.g. Senior Backend Engineer"
-            data-testid="node-role"
-            className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder-gray-500 read-only:bg-gray-800"
-          />
-        </div>
-
         {/* Tabs */}
         <div className="flex border-b border-gray-700 px-4">
-          {(['config', 'contracts', 'children'] as const).map(tab => (
+          {(['prompt', 'contracts', 'children'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -303,64 +186,161 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
                   : 'border-transparent text-gray-500 hover:text-gray-300'
               }`}
             >
-              {tab} {tab === 'contracts' && `(${nodeContracts.length})`}
-              {tab === 'children' && `(${children.length})`}
+              {tab === 'contracts' ? `contracts (${(contracts || []).filter(c => c.provider === node.name || (c.consumers || []).includes(node.name)).length})` : tab}
+              {tab === 'children' && ` (${children.length})`}
             </button>
           ))}
         </div>
 
-        {/* Improvement 6: Integration verification results */}
-        {node.integration_status && (
-          <div className={`mx-4 mt-3 p-3 rounded-lg border ${
-            node.integration_status === 'passed'
-              ? 'bg-green-950 border-green-800'
-              : 'bg-red-950 border-red-800'
-          }`}>
-            <h4 className={`text-xs font-semibold mb-1 ${
-              node.integration_status === 'passed' ? 'text-green-400' : 'text-red-400'
-            }`}>
-              Integration Verification: {node.integration_status === 'passed' ? 'PASSED' : 'FAILED'}
-            </h4>
-            {node.integration_results && (() => {
-              try {
-                const r = JSON.parse(node.integration_results) as { summary: string; details: string[]; checkedAt: string };
-                return (
-                  <div className="space-y-1">
-                    <p className="text-xs text-gray-300">{r.summary}</p>
-                    {r.details?.map((d: string, i: number) => (
-                      <p key={i} className="text-xs text-gray-400 pl-2">• {d}</p>
-                    ))}
-                    <p className="text-xs text-gray-600">Checked: {new Date(r.checkedAt).toLocaleTimeString()}</p>
-                  </div>
-                );
-              } catch { return null; }
-            })()}
-          </div>
-        )}
-
         <div className="px-4 py-3" data-testid="tab-content">
-          {activeTab === 'config' && (
-            <ConfigAccordion
-              node={displayNode}
-              onUpdate={updateDraft}
-              readOnly={!editing}
-            />
+          {activeTab === 'prompt' && (
+            <div className="space-y-4">
+              {/* Prompt */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Task Prompt</label>
+                {editing ? (
+                  <textarea
+                    value={displayNode.prompt}
+                    onChange={e => updateDraft({ prompt: e.target.value })}
+                    rows={6}
+                    className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono resize-y"
+                  />
+                ) : (
+                  <div
+                    className="text-sm text-gray-300 bg-gray-900 rounded px-3 py-2 whitespace-pre-wrap font-mono min-h-[4rem]"
+                    data-testid="node-prompt"
+                  >
+                    {node.prompt || <span className="text-gray-600 italic">No prompt set</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Model */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
+                {editing ? (
+                  <select
+                    value={displayNode.model}
+                    onChange={e => updateDraft({ model: e.target.value as TreeNode['model'] })}
+                    className="text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="sonnet">sonnet</option>
+                    <option value="haiku">haiku</option>
+                    <option value="opus">opus</option>
+                  </select>
+                ) : (
+                  <span className="text-sm text-gray-300">{node.model}</span>
+                )}
+              </div>
+
+              {/* Acceptance Criteria */}
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">Acceptance Criteria</label>
+                {editing ? (
+                  <textarea
+                    value={displayNode.acceptance_criteria}
+                    onChange={e => updateDraft({ acceptance_criteria: e.target.value })}
+                    rows={3}
+                    className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+                  />
+                ) : (
+                  <div className="text-sm text-gray-300 bg-gray-900 rounded px-2 py-1.5 whitespace-pre-wrap">
+                    {node.acceptance_criteria || <span className="text-gray-600 italic">None set</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Leaf toggle */}
+              {editing && (
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-gray-400">Is Leaf Node</label>
+                  <input
+                    type="checkbox"
+                    checked={displayNode.is_leaf}
+                    onChange={e => updateDraft({ is_leaf: e.target.checked })}
+                    className="rounded"
+                  />
+                </div>
+              )}
+            </div>
           )}
 
           {activeTab === 'contracts' && (
-            <ContractEditor
-              contracts={nodeContracts}
-              parentNodeId={node.id}
-              onUpdate={handleContractUpdate}
-              onCreate={handleContractCreate}
-            />
+            <div className="space-y-3">
+              {/* Contracts provided */}
+              <div>
+                <label className="block text-xs font-medium text-green-400 mb-1">Contracts Provided</label>
+                {editing ? (
+                  <input
+                    type="text"
+                    value={displayNode.contracts_provided.join(', ')}
+                    onChange={e => updateDraft({ contracts_provided: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                    placeholder="ContractA, ContractB"
+                    className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    {node.contracts_provided.length > 0
+                      ? node.contracts_provided.map(c => (
+                          <span key={c} className="text-xs bg-green-900 text-green-300 px-2 py-0.5 rounded">{c}</span>
+                        ))
+                      : <span className="text-xs text-gray-600 italic">None</span>
+                    }
+                  </div>
+                )}
+              </div>
+
+              {/* Contracts consumed */}
+              <div>
+                <label className="block text-xs font-medium text-blue-400 mb-1">Contracts Consumed</label>
+                {editing ? (
+                  <input
+                    type="text"
+                    value={displayNode.contracts_consumed.join(', ')}
+                    onChange={e => updateDraft({ contracts_consumed: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                    placeholder="ContractA, ContractB"
+                    className="w-full text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    {node.contracts_consumed.length > 0
+                      ? node.contracts_consumed.map(c => (
+                          <span key={c} className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded">{c}</span>
+                        ))
+                      : <span className="text-xs text-gray-600 italic">None</span>
+                    }
+                  </div>
+                )}
+              </div>
+
+              {/* Project-level contracts */}
+              {contracts && contracts.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="text-xs font-medium text-gray-400 mb-2">All Project Contracts</h4>
+                  {contracts.map((c, i) => (
+                    <div key={i} className="bg-gray-900 rounded p-2 mb-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-gray-200">{c.name}</span>
+                        <span className="text-xs text-gray-500">{c.type}</span>
+                        <span className={`text-xs px-1 rounded ${c.status === 'locked' ? 'bg-red-900 text-red-300' : 'bg-gray-700 text-gray-400'}`}>{c.status}</span>
+                      </div>
+                      {c.content && (
+                        <pre className="text-xs text-gray-500 font-mono overflow-hidden max-h-12">
+                          {c.content.slice(0, 150)}{c.content.length > 150 ? '...' : ''}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           {activeTab === 'children' && (
             <div className="space-y-2">
               {children.length === 0 ? (
                 <p className="text-sm text-gray-500 italic">
-                  {node.node_type === 'orchestrator' && node.status === 'pending'
+                  {!node.is_leaf && node.status === 'pending'
                     ? 'Approve & Decompose to generate children.'
                     : 'No child nodes.'}
                 </p>
@@ -372,7 +352,7 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
                   >
                     <div>
                       <span className="font-medium text-gray-200">{child.name}</span>
-                      <span className="ml-2 text-xs text-gray-500">{child.role}</span>
+                      <span className="ml-2 text-xs text-gray-500">{child.is_leaf ? 'leaf' : 'orchestrator'}</span>
                     </div>
                     <StatusBadge status={child.status} size="sm" />
                   </div>
@@ -381,14 +361,6 @@ export const NodeDetail: React.FC<NodeDetailProps> = ({
             </div>
           )}
         </div>
-
-        {/* Error log display */}
-        {node.error_log && (
-          <div className="mx-4 mb-4 p-3 bg-red-950 border border-red-800 rounded-lg" data-testid="error-display">
-            <h4 className="text-xs font-medium text-red-400 mb-1">Error Log</h4>
-            <pre className="text-xs text-red-300 whitespace-pre-wrap font-mono">{node.error_log}</pre>
-          </div>
-        )}
       </div>
     </div>
   );

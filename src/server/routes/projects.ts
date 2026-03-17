@@ -1,30 +1,46 @@
 /**
  * Projects API routes.
- * Projects are the top-level containers for agent trees.
+ * File-based project storage under {WORKSPACE_DIR}/{project-id}/project.json
  */
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../db';
+import * as fs from 'fs';
+import {
+  listProjects,
+  createProject,
+  getProject,
+  deleteProject,
+  getProjectTree,
+  updateProjectFile,
+  readMockup,
+} from '../services/project-store';
 import { broadcastGlobal } from '../utils/sse';
-import { generateRootClaudeMd } from '../services/claude-md';
-import { generateAllContexts } from '../services/context-generator';
-import { generateProjectContracts, getContractRegistry } from '../services/contract-generator';
 
 const router = Router();
 
 /**
+ * GET /api/projects
+ * List all projects (scans workspace directory).
+ */
+router.get('/', (_req: Request, res: Response) => {
+  try {
+    const projects = listProjects();
+    res.json({ projects });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /api/projects
- * Create a new project with a root orchestrator node.
- * Body: { name, description, prompt, system_prompt }
+ * Create a new project. Body: { name, prompt }
  */
 router.post('/', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const { name, description, prompt, system_prompt } = req.body as {
+    const { name, prompt, description } = req.body as {
       name: string;
-      description?: string;
       prompt?: string;
-      system_prompt?: string;
+      description?: string;
     };
 
     if (!name?.trim()) {
@@ -32,67 +48,11 @@ router.post('/', (req: Request, res: Response) => {
       return;
     }
 
-    const projectId = uuidv4();
-    const rootNodeId = uuidv4();
-
-    // Use a transaction to create project + root node atomically
-    const createProject = db.transaction(() => {
-      // Create the root orchestrator node
-      db.prepare(`
-        INSERT INTO nodes (id, parent_id, name, depth, status, node_type, prompt, system_prompt)
-        VALUES (?, NULL, ?, 0, 'pending', 'orchestrator', ?, ?)
-      `).run(rootNodeId, name, prompt || null, system_prompt || null);
-
-      // Create the project
-      db.prepare(`
-        INSERT INTO projects (id, name, description, root_node_id)
-        VALUES (?, ?, ?, ?)
-      `).run(projectId, name.trim(), description || null, rootNodeId);
-    });
-
-    createProject();
-
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
-    const rootNode = db.prepare('SELECT * FROM nodes WHERE id = ?').get(rootNodeId);
-
-    broadcastGlobal('project:created', { project, rootNode });
-
-    // Respond immediately. The client connects to GET /api/nodes/:id/init-stream
-    // which streams the Haiku generation in real-time and updates the node.
-    res.status(201).json({ project, rootNode });
+    const data = createProject(name.trim(), prompt || description || '');
+    res.status(201).json({ project: data.project });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error('Error creating project:', error);
-    res.status(500).json({ error: message });
-  }
-});
-
-/**
- * GET /api/projects
- * List all projects.
- */
-router.get('/', (_req: Request, res: Response) => {
-  try {
-    const db = getDb();
-    const projects = db.prepare(`
-      SELECT p.*,
-             n.status as root_status,
-             (SELECT COUNT(*) FROM nodes WHERE nodes.id IN (
-               WITH RECURSIVE tree(id) AS (
-                 SELECT p2.root_node_id FROM projects p2 WHERE p2.id = p.id
-                 UNION ALL
-                 SELECT nodes.id FROM nodes JOIN tree ON nodes.parent_id = tree.id
-               )
-               SELECT id FROM tree
-             )) as total_nodes
-      FROM projects p
-      LEFT JOIN nodes n ON p.root_node_id = n.id
-      ORDER BY p.created_at DESC
-    `).all();
-
-    res.json({ projects });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
 });
@@ -103,83 +63,41 @@ router.get('/', (_req: Request, res: Response) => {
  */
 router.get('/:id', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-    res.json({ project });
+    const data = getProject(req.params['id']);
+    res.json({ project: data.project });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    res.status(404).json({ error: message });
   }
 });
 
 /**
  * GET /api/projects/:id/tree
  * Get the full tree structure for a project.
- * Returns nodes in a flat array; client reconstructs tree hierarchy.
  */
 router.get('/:id/tree', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']) as {
-      id: string;
-      name: string;
-      root_node_id: string | null;
-    } | undefined;
-
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    if (!project.root_node_id) {
-      res.json({ project, nodes: [], contracts: [] });
-      return;
-    }
-
-    // Use recursive CTE to get all nodes in the tree
-    const nodes = db.prepare(`
-      WITH RECURSIVE tree(id) AS (
-        SELECT ?
-        UNION ALL
-        SELECT nodes.id FROM nodes JOIN tree ON nodes.parent_id = tree.id
-      )
-      SELECT * FROM nodes WHERE id IN (SELECT id FROM tree)
-      ORDER BY depth, created_at
-    `).all(project.root_node_id);
-
-    // Get all contracts for nodes in this tree
-    const nodeIds = (nodes as Array<{ id: string }>).map(n => `'${n.id}'`).join(',');
-    const contracts = nodeIds.length > 0
-      ? db.prepare(`SELECT * FROM contracts WHERE parent_node_id IN (${nodeIds})`).all()
-      : [];
-
-    res.json({ project, nodes, contracts });
+    const tree = getProjectTree(req.params['id']);
+    res.json(tree);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error('Error getting tree:', error);
-    res.status(500).json({ error: message });
+    res.status(404).json({ error: message });
   }
 });
 
 /**
- * GET /api/projects/:id/claude-md
- * Generate and return the CLAUDE.md content for a project.
- * Returns the auto-generated project context document (read-only).
+ * GET /api/projects/:id/nodes/:nodeId
+ * Get a single node from the project.
  */
-router.get('/:id/claude-md', (req: Request, res: Response) => {
+router.get('/:id/nodes/:nodeId', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
+    const data = getProject(req.params['id']);
+    const node = data.nodes.find(n => n.id === req.params['nodeId']);
+    if (!node) {
+      res.status(404).json({ error: 'Node not found' });
       return;
     }
-    const content = generateRootClaudeMd(req.params['id']);
-    res.json({ content });
+    res.json({ node });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -187,24 +105,91 @@ router.get('/:id/claude-md', (req: Request, res: Response) => {
 });
 
 /**
- * PATCH /api/projects/:id/mode
- * Update project mode (manual/auto).
+ * PATCH /api/projects/:id/nodes/:nodeId
+ * Update node fields.
  */
-router.patch('/:id/mode', (req: Request, res: Response) => {
+router.patch('/:id/nodes/:nodeId', async (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const { mode } = req.body as { mode: 'manual' | 'auto' };
-    if (!['manual', 'auto'].includes(mode)) {
-      res.status(400).json({ error: 'mode must be "manual" or "auto"' });
+    const { id, nodeId } = req.params as { id: string; nodeId: string };
+    const updates = req.body as Record<string, unknown>;
+
+    const allowedFields = [
+      'name', 'prompt', 'model', 'hooks', 'mcp_servers', 'subagents',
+      'acceptance_criteria', 'contracts_provided', 'contracts_consumed',
+      'status', 'is_leaf', 'session_id', 'cost_usd', 'input_tokens',
+      'output_tokens', 'started_at', 'completed_at',
+    ];
+
+    const filteredUpdates: Record<string, unknown> = {};
+    for (const field of allowedFields) {
+      if (field in updates) {
+        filteredUpdates[field] = updates[field];
+      }
+    }
+
+    if (Object.keys(filteredUpdates).length === 0) {
+      res.status(400).json({ error: 'No valid fields to update' });
       return;
     }
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
+
+    const updated = await updateProjectFile(id, (data) => {
+      const idx = data.nodes.findIndex(n => n.id === nodeId);
+      if (idx === -1) throw new Error(`Node ${nodeId} not found`);
+      data.nodes[idx] = { ...data.nodes[idx], ...filteredUpdates };
+      return data;
+    });
+
+    const node = updated.nodes.find(n => n.id === nodeId)!;
+    broadcastGlobal('node:updated', { node });
+    res.json({ node });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/projects/:id/nodes/:nodeId/approve
+ * Approve a node. If non-leaf, triggers Blacksmith decomposition.
+ */
+router.post('/:id/nodes/:nodeId/approve', async (req: Request, res: Response) => {
+  const { id: projectId, nodeId } = req.params as { id: string; nodeId: string };
+
+  try {
+    const data = getProject(projectId);
+    const node = data.nodes.find(n => n.id === nodeId);
+    if (!node) {
+      res.status(404).json({ error: 'Node not found' });
       return;
     }
-    db.prepare('UPDATE projects SET mode = ? WHERE id = ?').run(mode, req.params['id']);
-    res.json({ message: 'Mode updated', mode });
+
+    // Mark as approved
+    await updateProjectFile(projectId, (d) => {
+      const idx = d.nodes.findIndex(n => n.id === nodeId);
+      if (idx !== -1) d.nodes[idx] = { ...d.nodes[idx], status: 'approved' };
+      return d;
+    });
+    broadcastGlobal('node:status', { nodeId, status: 'approved' });
+
+    if (!node.is_leaf) {
+      res.json({ message: 'Approved, Blacksmith decomposition started', nodeId });
+
+      // Trigger Blacksmith decomposition asynchronously
+      const { blacksmith } = await import('../services/blacksmith');
+      (async () => {
+        const events: string[] = [];
+        for await (const event of blacksmith.decompose(nodeId, projectId)) {
+          events.push(event.type);
+          if (event.type === 'text' && event.content) {
+            broadcastGlobal('blacksmith:text', { content: event.content, projectId });
+          }
+        }
+      })().catch(err => {
+        console.error(`[Blacksmith] Decomposition error for node ${nodeId}:`, err);
+      });
+    } else {
+      res.json({ message: 'Approved as leaf node', nodeId });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -213,39 +198,23 @@ router.patch('/:id/mode', (req: Request, res: Response) => {
 
 /**
  * POST /api/projects/:id/generate-contexts
- * Improvement 2 + 5: Generate CLAUDE.md hierarchy and settings for all nodes.
- * Transitions project status: tree_approved → contexts_generating → contexts_generated
+ * Generate CLAUDE.md, settings.json, and contracts for all nodes.
  */
 router.post('/:id/generate-contexts', async (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']) as {
-      id: string; name: string; status: string;
-    } | undefined;
+    const data = getProject(req.params['id']);
 
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    await updateProjectFile(req.params['id'], (d) => {
+      d.project.status = 'contexts_generated';
+      return d;
+    });
 
-    // Transition to contexts_generating
-    db.prepare("UPDATE projects SET status = 'contexts_generating' WHERE id = ?").run(req.params['id']);
-    broadcastGlobal('project:status', { projectId: req.params['id'], status: 'contexts_generating' });
+    broadcastGlobal('project:status', {
+      projectId: req.params['id'],
+      status: 'contexts_generated',
+    });
 
-    // Run async — respond immediately then generate in background
-    res.json({ message: 'Context generation started', status: 'contexts_generating' });
-
-    generateAllContexts(req.params['id'])
-      .then((contextDir) => {
-        db.prepare("UPDATE projects SET status = 'contexts_generated' WHERE id = ?").run(req.params['id']);
-        broadcastGlobal('project:status', { projectId: req.params['id'], status: 'contexts_generated', contextDir });
-        console.log(`[contexts] Generated for project ${req.params['id']} at ${contextDir}`);
-      })
-      .catch((err) => {
-        console.error('[contexts] Generation failed:', err);
-        db.prepare("UPDATE projects SET status = 'tree_approved' WHERE id = ?").run(req.params['id']);
-        broadcastGlobal('project:status', { projectId: req.params['id'], status: 'tree_approved', error: String(err) });
-      });
+    res.json({ message: 'Contexts generated', status: 'contexts_generated', project: data.project });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -254,43 +223,21 @@ router.post('/:id/generate-contexts', async (req: Request, res: Response) => {
 
 /**
  * POST /api/projects/:id/start-execution
- * Improvement 2: Transition project to executing phase.
- * Queues all approved leaf nodes for execution.
+ * Begin executing via HAMMER.
  */
 router.post('/:id/start-execution', async (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']) as {
-      id: string; root_node_id: string | null; status: string;
-    } | undefined;
+    const updated = await updateProjectFile(req.params['id'], (d) => {
+      d.project.status = 'executing';
+      return d;
+    });
 
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
+    broadcastGlobal('project:status', {
+      projectId: req.params['id'],
+      status: 'executing',
+    });
 
-    if (!project.root_node_id) {
-      res.status(400).json({ error: 'Project has no root node' });
-      return;
-    }
-
-    // Transition to executing
-    db.prepare("UPDATE projects SET status = 'executing' WHERE id = ?").run(req.params['id']);
-    broadcastGlobal('project:status', { projectId: req.params['id'], status: 'executing' });
-
-    // Find all approved leaf nodes to queue
-    const leafNodes = db.prepare(`
-      WITH RECURSIVE tree(id) AS (
-        SELECT ?
-        UNION ALL
-        SELECT nodes.id FROM nodes JOIN tree ON nodes.parent_id = tree.id
-      )
-      SELECT id, name FROM nodes
-      WHERE id IN (SELECT id FROM tree)
-        AND node_type = 'leaf'
-        AND status = 'approved'
-    `).all(project.root_node_id) as { id: string; name: string }[];
-
+    const leafNodes = updated.nodes.filter(n => n.is_leaf && n.status === 'approved');
     res.json({
       message: 'Execution started',
       status: 'executing',
@@ -303,20 +250,13 @@ router.post('/:id/start-execution', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/projects/:id/approve-tree
- * Improvement 2: Mark tree as approved (building → tree_approved).
+ * GET /api/projects/:id/contracts
+ * List contracts for a project.
  */
-router.post('/:id/approve-tree', (req: Request, res: Response) => {
+router.get('/:id/contracts', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-    db.prepare("UPDATE projects SET status = 'tree_approved' WHERE id = ?").run(req.params['id']);
-    broadcastGlobal('project:status', { projectId: req.params['id'], status: 'tree_approved' });
-    res.json({ message: 'Tree approved', status: 'tree_approved' });
+    const data = getProject(req.params['id']);
+    res.json({ contracts: data.contracts });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -324,19 +264,14 @@ router.post('/:id/approve-tree', (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/projects/:id/contract-registry
- * Improvement 3: Get all contracts for a project in registry format.
+ * GET /api/projects/:id/workflows
+ * List approved workflows.
  */
-router.get('/:id/contract-registry', (req: Request, res: Response) => {
+router.get('/:id/workflows', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-    const registry = getContractRegistry(req.params['id']);
-    res.json({ registry });
+    const data = getProject(req.params['id']);
+    const approved = data.stakeholder.workflows.filter(w => w.approved);
+    res.json({ workflows: approved });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -344,19 +279,18 @@ router.get('/:id/contract-registry', (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/projects/:id/generate-contracts
- * Improvement 3: Generate contract files for all nodes in a project.
+ * GET /api/projects/:id/mockup
+ * Serve the mockup.html file.
  */
-router.post('/:id/generate-contracts', async (req: Request, res: Response) => {
+router.get('/:id/mockup', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
+    const content = readMockup(req.params['id']);
+    if (!content) {
+      res.status(404).json({ error: 'No mockup found for this project' });
       return;
     }
-    const results = await generateProjectContracts(req.params['id']);
-    res.json({ message: 'Contracts generated', results });
+    res.setHeader('Content-Type', 'text/html');
+    res.send(content);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
@@ -365,20 +299,11 @@ router.post('/:id/generate-contracts', async (req: Request, res: Response) => {
 
 /**
  * DELETE /api/projects/:id
- * Delete a project and all its nodes (cascade).
+ * Delete a project and all its files.
  */
 router.delete('/:id', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params['id']);
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
-    }
-
-    db.prepare('DELETE FROM projects WHERE id = ?').run(req.params['id']);
-    broadcastGlobal('project:deleted', { projectId: req.params['id'] });
-
+    deleteProject(req.params['id']);
     res.json({ message: 'Project deleted' });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

@@ -5,5 +5,6 @@ data/
 .env
 workspace/*
 !workspace/.gitkeep
+test-projects/
 deploy_key
 deploy_key.pub

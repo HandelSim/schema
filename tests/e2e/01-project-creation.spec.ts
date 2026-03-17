@@ -1,96 +1,60 @@
+/**
+ * 01-project-creation.spec.ts
+ */
 import { test, expect } from "@playwright/test";
-import {
-  openCreateModal,
-  createProject,
-  getTreeNodeCount,
-  collectConsoleErrors,
-  TEST_PROJECT_NAME,
-  TEST_PROMPT,
-} from "./helpers";
 
 test.describe("Project Creation", () => {
-
   test("landing page loads without console errors", async ({ page }) => {
-    const errors = await collectConsoleErrors(page, async () => {
-      await page.goto("/");
-      await page.waitForLoadState("networkidle");
-    });
-
-    // Filter out known non-critical browser warnings
-    const realErrors = errors.filter(
-      (e) => !e.includes("Warning:") && !e.includes("DevTools") && !e.includes("favicon")
-    );
-    expect(realErrors).toEqual([]);
-  });
-
-  test("sidebar has a New Project button", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("console", msg => { if (msg.type() === "error") errors.push(msg.text()); });
     await page.goto("/");
     await page.waitForLoadState("networkidle");
-
-    const btn = page.locator('[data-testid="new-project-button"]');
-    await expect(btn).toBeVisible();
-    await expect(btn).toBeEnabled();
+    await expect(page.locator("body")).toBeVisible();
+    const critical = errors.filter(e => !e.includes("favicon") && !e.includes("404"));
+    expect(critical.length).toBe(0);
   });
 
-  test("clicking New opens the create project modal", async ({ page }) => {
+  test("project list is visible in left panel", async ({ page }) => {
     await page.goto("/");
-    await openCreateModal(page);
-
-    await expect(page.locator('[data-testid="project-name"]')).toBeVisible();
-    await expect(page.locator('[data-testid="project-prompt"]')).toBeVisible();
-    await expect(page.locator('[data-testid="create-project"]')).toBeVisible();
-    await expect(page.locator('[data-testid="cancel-button"]')).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator("[data-testid='project-list']")).toBeVisible();
   });
 
-  test("cancel button closes the modal without creating a project", async ({ page }) => {
+  test("creating a project shows tree and Blacksmith", async ({ page }) => {
     await page.goto("/");
-    const projectsBefore = await page.locator('[data-testid="project-item"]').count();
-
-    await openCreateModal(page);
-    await page.fill('[data-testid="project-name"]', "Will Not Be Created");
-    await page.click('[data-testid="cancel-button"]');
-
-    // Modal should be gone
-    await expect(page.locator('[data-testid="project-name"]')).not.toBeVisible();
-
-    // No new project created
-    const projectsAfter = await page.locator('[data-testid="project-item"]').count();
-    expect(projectsAfter).toEqual(projectsBefore);
+    await page.waitForLoadState("networkidle");
+    await page.click("[data-testid='create-project-button']");
+    await page.fill("[data-testid='project-name-input']", "Test Project Alpha");
+    await page.fill("[data-testid='project-prompt-input']", "Build a simple task manager web app");
+    await page.click("[data-testid='create-project-submit']");
+    await expect(
+      page.locator("[data-testid='project-list-item']").filter({ hasText: "Test Project Alpha" })
+    ).toBeVisible({ timeout: 15000 });
+    await expect(page.locator("[data-testid='tree-canvas']")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("[data-testid='blacksmith-terminal']")).toBeVisible({ timeout: 10000 });
   });
 
-  test("submit button is disabled when fields are empty", async ({ page }) => {
+  test("Blacksmith is default right panel tab", async ({ page }) => {
     await page.goto("/");
-    await openCreateModal(page);
-
-    const submitBtn = page.locator('[data-testid="create-project"]');
-    await expect(submitBtn).toBeDisabled();
+    await page.waitForLoadState("networkidle");
+    await page.click("[data-testid='create-project-button']");
+    await page.fill("[data-testid='project-name-input']", "Tab Test Project");
+    await page.fill("[data-testid='project-prompt-input']", "Test tab visibility");
+    await page.click("[data-testid='create-project-submit']");
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Tab Test Project" }).waitFor({ timeout: 10000 });
+    await expect(page.locator("[data-testid='right-panel-tab-blacksmith']")).toBeVisible();
+    await expect(page.locator("[data-testid='blacksmith-terminal']")).toBeVisible();
   });
 
-  test("creating a project shows it in the sidebar", async ({ page }) => {
-    await createProject(page, TEST_PROJECT_NAME + " Sidebar", TEST_PROMPT);
-
-    const items = page.locator('[data-testid="project-item"]');
-    await expect(items.first()).toBeVisible();
-  });
-
-  test("creating a project shows the tree canvas", async ({ page }) => {
-    await createProject(page, TEST_PROJECT_NAME + " Canvas", TEST_PROMPT);
-
-    const treeCanvas = page.locator('[data-testid="tree-canvas"]');
-    await expect(treeCanvas).toBeVisible();
-  });
-
-  test("creating a project produces at least one tree node", async ({ page }) => {
-    await createProject(page, TEST_PROJECT_NAME + " Nodes", TEST_PROMPT);
-
-    const count = await getTreeNodeCount(page);
-    expect(count).toBeGreaterThanOrEqual(1);
-  });
-
-  test("project status bar is visible after creation", async ({ page }) => {
-    await createProject(page, TEST_PROJECT_NAME + " Status", TEST_PROMPT);
-
-    const status = page.locator('[data-testid="project-status"]');
-    await expect(status).toBeVisible();
+  test("center panel has Tree tab visible by default", async ({ page }) => {
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await page.click("[data-testid='create-project-button']");
+    await page.fill("[data-testid='project-name-input']", "Center Tab Project");
+    await page.fill("[data-testid='project-prompt-input']", "Test center tab");
+    await page.click("[data-testid='create-project-submit']");
+    await page.locator("[data-testid='project-list-item']").filter({ hasText: "Center Tab Project" }).waitFor({ timeout: 10000 });
+    await expect(page.locator("[data-testid='center-tab-tree']")).toBeVisible();
+    await expect(page.locator("[data-testid='tree-canvas']")).toBeVisible({ timeout: 10000 });
   });
 });

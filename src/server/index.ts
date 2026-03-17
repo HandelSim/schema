@@ -1,21 +1,19 @@
 /**
- * Agent Tree Orchestrator - Express API Server
+ * SCHEMA - Express API Server
  *
  * Architecture:
  * - Serves both the REST API (port 3001) and static frontend (port 3000 in prod)
  * - Uses SSE for real-time updates to the frontend tree graph
- * - SQLite for persistence (simple, no infra needed)
- * - Spawns Claude Code CLI subprocesses for leaf node execution
+ * - File-based project storage (project.json per project)
+ * - Blacksmith: persistent Claude Agent SDK architect
  */
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { getDb } from './db';
 import projectsRouter from './routes/projects';
-import nodesRouter from './routes/nodes';
-import contractsRouter from './routes/contracts';
-import proposalsRouter from './routes/proposals';
+import blacksmithRouter from './routes/blacksmith';
 import { broadcastGlobal, initSSE } from './utils/sse';
+import { WORKSPACE_DIR } from './services/project-store';
 
 const app = express();
 const API_PORT = parseInt(process.env.PORT_API || '3001', 10);
@@ -25,7 +23,6 @@ const FRONTEND_PORT = parseInt(process.env.PORT_FRONTEND || '3000', 10);
 // Middleware
 // ============================================================
 
-// CORS: allow frontend dev server and same-origin requests
 app.use(cors({
   origin: [
     `http://localhost:${FRONTEND_PORT}`,
@@ -41,7 +38,6 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging in development
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, _res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -54,31 +50,17 @@ if (process.env.NODE_ENV !== 'production') {
 // ============================================================
 
 app.use('/api/projects', projectsRouter);
-app.use('/api/nodes', nodesRouter);
-app.use('/api/contracts', contractsRouter);
-app.use('/api/proposals', proposalsRouter);
+app.use('/api/blacksmith', blacksmithRouter);
 
-// Health check endpoint
 app.get('/api/health', (_req, res) => {
-  try {
-    const db = getDb();
-    // Simple query to verify DB is accessible
-    db.prepare('SELECT 1').get();
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      database: 'connected',
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'unhealthy',
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    workspace: WORKSPACE_DIR,
+    model: process.env.SCHEMA_MODEL || 'sonnet',
+  });
 });
 
-// Global SSE endpoint for tree-wide status updates
-// Clients subscribe here to receive all node status changes
 app.get('/api/events', (req, res) => {
   const clientId = `global-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   initSSE(req, res, clientId);
@@ -93,7 +75,6 @@ const clientBuildPath = path.join(__dirname, '../../dist/client');
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(clientBuildPath));
 
-  // SPA fallback: serve index.html for all non-API routes
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api')) {
       res.sendFile(path.join(clientBuildPath, 'index.html'));
@@ -114,37 +95,27 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // Start Server
 // ============================================================
 
-// Initialize database on startup
-try {
-  getDb();
-  console.log('[DB] Database initialized successfully');
-} catch (err) {
-  console.error('[DB] Failed to initialize database:', err);
-  process.exit(1);
-}
+console.log(`[SCHEMA] Workspace directory: ${WORKSPACE_DIR}`);
+console.log(`[SCHEMA] Model: ${process.env.SCHEMA_MODEL || 'sonnet'}`);
 
 app.listen(API_PORT, '0.0.0.0', () => {
   console.log(`[API] Server running on http://0.0.0.0:${API_PORT}`);
   console.log(`[API] Environment: ${process.env.NODE_ENV || 'development'}`);
   if (process.env.ANTHROPIC_API_KEY) {
-    console.log('[API] Anthropic API: configured via API key ✓');
+    console.log('[API] Anthropic API: configured via API key');
   } else if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    console.log('[API] Anthropic API: configured via Claude Code OAuth token ✓');
+    console.log('[API] Anthropic API: configured via Claude Code OAuth token');
   } else {
-    console.error('[API] ⚠️  WARNING: No Claude auth found. Set ANTHROPIC_API_KEY or ensure CLAUDE_CODE_OAUTH_TOKEN is present.');
+    console.warn('[API] WARNING: No Claude auth found. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.');
   }
 });
 
-// If in production, also serve frontend on its own port
-// Port 3000 proxies /api/* to the API server on port 3001 so relative URLs work
 if (process.env.NODE_ENV === 'production') {
   const http = require('http') as typeof import('http');
   const frontendApp = express();
 
-  // Proxy /api/* to the API server, with proper SSE (streaming) support
   frontendApp.use('/api', (req, res) => {
     const isSSE = req.headers.accept === 'text/event-stream';
-
     const options = {
       hostname: '127.0.0.1',
       port: API_PORT,
@@ -152,42 +123,27 @@ if (process.env.NODE_ENV === 'production') {
       method: req.method,
       headers: { ...req.headers, host: `127.0.0.1:${API_PORT}` },
     };
-
     const proxy = http.request(options, (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-
-      // For SSE: disable Nagle, flush headers immediately, pipe without buffering
       if (isSSE) {
         res.socket?.setNoDelay(true);
         proxyRes.on('data', (chunk: Buffer) => {
           res.write(chunk);
-          // Flush each chunk immediately so events aren't buffered
-          if (typeof (res as unknown as { flush?: () => void }).flush === 'function') {
-            (res as unknown as { flush: () => void }).flush();
-          }
+          if (typeof (res as any).flush === 'function') (res as any).flush();
         });
         proxyRes.on('end', () => res.end());
       } else {
         proxyRes.pipe(res);
       }
     });
-
     proxy.on('error', (err) => {
       if (!res.headersSent) res.status(502).json({ error: 'API proxy error' });
       else res.end();
-      // suppress noisy ECONNRESET logs from browser tab closes
       if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET') {
         console.error('[Frontend proxy] Error:', err.message);
       }
     });
-
-    // When client disconnects before response arrives, abort the upstream request.
-    // Use res.on('close') instead of req.on('close') to avoid destroying the proxy
-    // when the request body stream ends normally (which also fires req 'close').
-    res.on('close', () => {
-      if (!proxy.destroyed) proxy.destroy();
-    });
-
+    res.on('close', () => { if (!proxy.destroyed) proxy.destroy(); });
     if (['POST', 'PUT', 'PATCH'].includes(req.method || '')) {
       req.pipe(proxy);
     } else {
@@ -200,7 +156,7 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(clientBuildPath, 'index.html'));
   });
   frontendApp.listen(FRONTEND_PORT, '0.0.0.0', () => {
-    console.log(`[Frontend] Serving on http://0.0.0.0:${FRONTEND_PORT} (proxying /api → :${API_PORT})`);
+    console.log(`[Frontend] Serving on http://0.0.0.0:${FRONTEND_PORT}`);
   });
 }
 

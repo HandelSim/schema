@@ -1,0 +1,15 @@
+[DB] Database initialized successfully
+[API] Server running on http://0.0.0.0:3001
+[API] Environment: production
+[API] ⚠️  WARNING: ANTHROPIC_API_KEY is NOT set. Node decomposition will fail until this is configured.
+[Frontend] Serving on http://0.0.0.0:3000 (proxying /api → :3001)
+[DB] Database initialized successfully
+[API] Server running on http://0.0.0.0:3001
+[API] Environment: production
+[API] Anthropic API: configured via Claude Code OAuth token ✓
+[Frontend] Serving on http://0.0.0.0:3000 (proxying /api → :3001)
+[DB] Database initialized successfully
+[API] Server running on http://0.0.0.0:3001
+[API] Environment: production
+[API] Anthropic API: configured via Claude Code OAuth token ✓
+[Frontend] Serving on http://0.0.0.0:3000 (proxying /api → :3001)

@@ -1,15 +1,16 @@
 /**
  * useTree - Manages the full tree state with real-time SSE updates.
  * Central state management for the agent tree graph.
+ * Uses file-based project.json storage via REST API.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { TreeNode, Contract, Project, NodeStatus, LogEntry } from '../types';
+import { TreeNode, ContractRecord, Project, NodeStatus, LogEntry } from '../types';
 import { useSSE } from './useSSE';
 
 interface TreeState {
   project: Project | null;
   nodes: TreeNode[];
-  contracts: Contract[];
+  contracts: ContractRecord[];
   loading: boolean;
   error: string | null;
 }
@@ -23,9 +24,6 @@ interface UseTreeReturn extends TreeState {
   refreshTree: () => void;
   // Node operations
   approveNode: (nodeId: string, decompose?: boolean) => Promise<void>;
-  rejectNode: (nodeId: string, feedback?: string) => Promise<void>;
-  executeNode: (nodeId: string) => Promise<void>;
-  verifyNode: (nodeId: string) => Promise<void>;
   updateNode: (nodeId: string, updates: Partial<TreeNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
 }
@@ -49,24 +47,27 @@ export function useTree(projectId: string | null): UseTreeReturn {
   const clearLogs = useCallback(() => setLogs([]), []);
 
   const fetchTree = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId) {
+      setState({ project: null, nodes: [], contracts: [], loading: false, error: null });
+      return;
+    }
 
     setState(prev => ({ ...prev, loading: true, error: null }));
     try {
       const response = await fetch(`/api/projects/${projectId}/tree`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json() as { project: Project; nodes: TreeNode[]; contracts: Contract[] };
+      const data = await response.json() as { project: Project; nodes: TreeNode[]; contracts: ContractRecord[] };
       setState({
         project: data.project,
-        nodes: data.nodes,
-        contracts: data.contracts,
+        nodes: data.nodes || [],
+        contracts: data.contracts || [],
         loading: false,
         error: null,
       });
-      // Auto-select root node if there's exactly one pending node and nothing is selected yet
+      // Auto-select root node if nothing is selected yet
       setSelectedNodeId(prev => {
         if (prev) return prev;
-        const rootNode = data.nodes.find(n => !n.parent_id && n.status === 'pending');
+        const rootNode = (data.nodes || []).find(n => !n.parent_id);
         return rootNode ? rootNode.id : null;
       });
     } catch (err) {
@@ -77,20 +78,8 @@ export function useTree(projectId: string | null): UseTreeReturn {
 
   useEffect(() => {
     fetchTree();
-  }, [fetchTree]);
-
-  // Parse raw node data from API (JSON fields are strings in SQLite)
-  const parseNode = (raw: Record<string, unknown>): TreeNode => ({
-    ...raw as unknown as TreeNode,
-    hooks: typeof raw['hooks'] === 'string' ? JSON.parse(raw['hooks'] as string || 'null') : raw['hooks'],
-    mcp_tools: typeof raw['mcp_tools'] === 'string' ? JSON.parse(raw['mcp_tools'] as string || '[]') : (raw['mcp_tools'] as TreeNode['mcp_tools'] || []),
-    allowed_tools: typeof raw['allowed_tools'] === 'string' ? JSON.parse(raw['allowed_tools'] as string || '[]') : (raw['allowed_tools'] as string[] || []),
-    allowed_paths: typeof raw['allowed_paths'] === 'string' ? JSON.parse(raw['allowed_paths'] as string || '[]') : (raw['allowed_paths'] as string[] || []),
-    dependencies: typeof raw['dependencies'] === 'string' ? JSON.parse(raw['dependencies'] as string || '[]') : (raw['dependencies'] as string[] || []),
-    context_files: typeof raw['context_files'] === 'string' ? JSON.parse(raw['context_files'] as string || '[]') : (raw['context_files'] as string[] || []),
-    apis_provided: typeof raw['apis_provided'] === 'string' ? JSON.parse(raw['apis_provided'] as string || '[]') : (raw['apis_provided'] as string[] || []),
-    apis_consumed: typeof raw['apis_consumed'] === 'string' ? JSON.parse(raw['apis_consumed'] as string || '[]') : (raw['apis_consumed'] as string[] || []),
-  });
+    setSelectedNodeId(null);
+  }, [fetchTree, projectId]);
 
   // Handle SSE events for real-time updates
   useSSE('/api/events', {
@@ -104,23 +93,24 @@ export function useTree(projectId: string | null): UseTreeReturn {
           nodes: prev.nodes.map(n => n.id === nodeId ? { ...n, status } : n),
         }));
         addLog({
-          message: `Node status changed to ${status}`,
+          message: `Node status → ${status}`,
           timestamp: new Date().toISOString(),
           type: 'system',
         });
       } else if (event === 'node:created') {
-        const newNode = parseNode(d['node'] as Record<string, unknown>);
-        setState(prev => ({
-          ...prev,
-          nodes: [...prev.nodes, newNode],
-        }));
+        const newNode = d['node'] as TreeNode;
+        setState(prev => {
+          // Avoid duplicates
+          if (prev.nodes.some(n => n.id === newNode.id)) return prev;
+          return { ...prev, nodes: [...prev.nodes, newNode] };
+        });
         addLog({
-          message: `New node created: ${newNode.name}`,
+          message: `New node: ${newNode.name}`,
           timestamp: new Date().toISOString(),
           type: 'system',
         });
       } else if (event === 'node:updated') {
-        const updated = parseNode(d['node'] as Record<string, unknown>);
+        const updated = d['node'] as TreeNode;
         setState(prev => ({
           ...prev,
           nodes: prev.nodes.map(n => n.id === updated.id ? updated : n),
@@ -131,14 +121,24 @@ export function useTree(projectId: string | null): UseTreeReturn {
           ...prev,
           nodes: prev.nodes.filter(n => n.id !== nodeId),
         }));
-      } else if (event === 'contract:created' || event === 'contract:updated') {
-        const contract = d['contract'] as Contract;
-        setState(prev => ({
-          ...prev,
-          contracts: event === 'contract:created'
-            ? [...prev.contracts, contract]
-            : prev.contracts.map(c => c.id === contract.id ? contract : c),
-        }));
+      } else if (event === 'project:updated') {
+        const project = d['project'] as Project;
+        setState(prev => {
+          if (prev.project?.id !== project.id) return prev;
+          return { ...prev, project };
+        });
+      } else if (event === 'blacksmith:text') {
+        const { content } = d as { content: string };
+        if (content) {
+          addLog({
+            message: `Blacksmith: ${content.slice(0, 120)}`,
+            timestamp: new Date().toISOString(),
+            type: 'output',
+          });
+        }
+      } else if (event === 'blacksmith:decomposed') {
+        // Refresh tree after decomposition
+        setTimeout(fetchTree, 500);
       }
     },
     onOpen: () => {
@@ -150,57 +150,28 @@ export function useTree(projectId: string | null): UseTreeReturn {
   });
 
   // Node operations
-  const approveNode = useCallback(async (nodeId: string, decompose = true) => {
-    const response = await fetch(`/api/nodes/${nodeId}/approve`, {
+  const approveNode = useCallback(async (nodeId: string, _decompose = true) => {
+    if (!projectId) return;
+    const response = await fetch(`/api/projects/${projectId}/nodes/${nodeId}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decompose }),
+      body: JSON.stringify({}),
     });
     if (!response.ok) {
       const err = await response.json() as { error: string };
       throw new Error(err.error);
     }
     addLog({
-      message: `Approved node ${nodeId}${decompose ? ' and started decomposition' : ' as leaf'}`,
+      message: `Approved node ${nodeId}`,
       timestamp: new Date().toISOString(),
       type: 'system',
     });
-  }, [addLog]);
-
-  const rejectNode = useCallback(async (nodeId: string, feedback?: string) => {
-    const response = await fetch(`/api/nodes/${nodeId}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feedback }),
-    });
-    if (!response.ok) {
-      const err = await response.json() as { error: string };
-      throw new Error(err.error);
-    }
-  }, []);
-
-  const executeNode = useCallback(async (nodeId: string) => {
-    const response = await fetch(`/api/nodes/${nodeId}/execute`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      const err = await response.json() as { error: string };
-      throw new Error(err.error);
-    }
-  }, []);
-
-  const verifyNode = useCallback(async (nodeId: string) => {
-    const response = await fetch(`/api/nodes/${nodeId}/verify`, {
-      method: 'POST',
-    });
-    if (!response.ok) {
-      const err = await response.json() as { error: string };
-      throw new Error(err.error);
-    }
-  }, []);
+    setTimeout(fetchTree, 1000);
+  }, [projectId, addLog, fetchTree]);
 
   const updateNode = useCallback(async (nodeId: string, updates: Partial<TreeNode>) => {
-    const response = await fetch(`/api/nodes/${nodeId}`, {
+    if (!projectId) return;
+    const response = await fetch(`/api/projects/${projectId}/nodes/${nodeId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -209,17 +180,23 @@ export function useTree(projectId: string | null): UseTreeReturn {
       const err = await response.json() as { error: string };
       throw new Error(err.error);
     }
-  }, []);
+  }, [projectId]);
 
   const deleteNode = useCallback(async (nodeId: string) => {
-    const response = await fetch(`/api/nodes/${nodeId}`, {
-      method: 'DELETE',
+    if (!projectId) return;
+    // Remove node and all descendants from state
+    setState(prev => {
+      // Find all descendant IDs
+      const toRemove = new Set<string>();
+      const queue = [nodeId];
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        toRemove.add(id);
+        prev.nodes.filter(n => n.parent_id === id).forEach(n => queue.push(n.id));
+      }
+      return { ...prev, nodes: prev.nodes.filter(n => !toRemove.has(n.id)) };
     });
-    if (!response.ok) {
-      const err = await response.json() as { error: string };
-      throw new Error(err.error);
-    }
-  }, []);
+  }, [projectId]);
 
   return {
     ...state,
@@ -230,9 +207,6 @@ export function useTree(projectId: string | null): UseTreeReturn {
     clearLogs,
     refreshTree: fetchTree,
     approveNode,
-    rejectNode,
-    executeNode,
-    verifyNode,
     updateNode,
     deleteNode,
   };

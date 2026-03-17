@@ -1,33 +1,24 @@
 /**
- * Shared TypeScript type definitions for the ATO frontend.
- * These mirror the database schema and API response shapes.
+ * Shared TypeScript type definitions for the SCHEMA frontend.
+ * These mirror the project.json schema and API response shapes.
  */
 
 export type NodeStatus =
   | 'pending'
   | 'approved'
   | 'decomposing'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'rejected';
-
-export type ProjectStatus =
-  | 'building'
-  | 'tree_approved'
-  | 'contexts_generating'
-  | 'contexts_generated'
   | 'executing'
   | 'completed'
   | 'failed';
 
-export type TestingTier = 'tier1' | 'tier2' | 'tier3';
-
-export type NodeType = 'orchestrator' | 'leaf' | 'test';
+export type ProjectStatus =
+  | 'building'
+  | 'tree_approved'
+  | 'contexts_generated'
+  | 'executing'
+  | 'completed';
 
 export type ModelType = 'sonnet' | 'haiku' | 'opus';
-
-export type EscalationPolicy = 'ask_human' | 'auto_retry' | 'fail';
 
 export interface HookCommand {
   type: 'command';
@@ -57,80 +48,113 @@ export interface TreeNode {
   name: string;
   depth: number;
   status: NodeStatus;
-  node_type: NodeType;
-  prompt: string | null;
-  role: string | null;
-  system_prompt: string | null;
-  hooks: HookConfig | null;
-  mcp_tools: MCPTool[];
-  allowed_tools: string[];
-  allowed_paths: string[];
-  dependencies: string[];
-  acceptance_criteria: string | null;
-  context_files: string[];
-  max_iterations: number;
-  escalation_policy: EscalationPolicy;
+  is_leaf: boolean;
+  prompt: string;
   model: ModelType;
-  // Improvement 1: testing tier
-  testing_tier: TestingTier;
-  // Improvement 3: API contracts
-  apis_provided: string[];
-  apis_consumed: string[];
-  // Improvement 6: integration verification
-  integration_status: string | null;
-  integration_results: string | null;
+  hooks: Record<string, any>;
+  mcp_servers: Record<string, any>;
+  subagents: Record<string, any>;
+  acceptance_criteria: string;
+  contracts_provided: string[];
+  contracts_consumed: string[];
+  session_id: string | null;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
   started_at: string | null;
   completed_at: string | null;
-  execution_log: string | null;
-  error_log: string | null;
-  created_at: string;
 }
 
-export interface Contract {
-  id: string;
-  parent_node_id: string;
+export interface ContractRecord {
   name: string;
-  content: string | null;
-  created_by: string | null;
-  updated_at: string;
+  type: 'typescript' | 'openapi' | 'graphql';
+  provider: string;
+  consumers: string[];
+  content: string;
+  version: number;
+  status: 'draft' | 'locked';
+}
+
+export interface WorkflowRecord {
+  id: string;
+  name: string;
+  description: string;
+  steps: {
+    action: string;
+    target: string;
+    value?: string;
+    expected: string;
+  }[];
+  approved: boolean;
+  stakeholder_feedback: string | null;
+  timestamp: string;
+}
+
+export interface StakeholderData {
+  clarifications: { question: string; answer: string; timestamp: string }[];
+  mockup_path: string | null;
+  mockup_feedback: { feedback: string; resolution: string; timestamp: string }[];
+  workflows: WorkflowRecord[];
+  decisions: { topic: string; decision: string; reasoning: string; timestamp: string }[];
+}
+
+export interface ProjectFile {
+  project: {
+    id: string;
+    name: string;
+    prompt: string;
+    status: ProjectStatus;
+    created_at: string;
+    updated_at: string;
+  };
+  nodes: TreeNode[];
+  contracts: ContractRecord[];
+  stakeholder: StakeholderData;
 }
 
 export interface Project {
   id: string;
   name: string;
-  description: string | null;
-  root_node_id: string | null;
-  mode: 'manual' | 'auto';
-  // Improvement 2: lifecycle phases
+  prompt: string;
   status: ProjectStatus;
   created_at: string;
+  updated_at: string;
 }
 
-export interface ContractProposal {
-  id: string;
-  contract_id: string;
-  proposed_by: string | null;
-  old_content: string | null;
-  new_content: string;
-  change_type: 'backward_compatible' | 'breaking' | 'unknown';
-  status: 'pending' | 'approved' | 'rejected';
-  analysis: string | null;
-  reviewed_by: string | null;
-  created_at: string;
-  resolved_at: string | null;
+export interface Contract {
+  name: string;
+  type: 'typescript' | 'openapi' | 'graphql';
+  provider: string;
+  consumers: string[];
+  content: string;
+  version: number;
+  status: 'draft' | 'locked';
 }
 
 export interface TreeData {
   project: Project;
   nodes: TreeNode[];
-  contracts: Contract[];
+  contracts: ContractRecord[];
 }
 
-export interface VerificationResult {
-  passed: boolean;
-  summary: string;
-  issues: string[];
-  recommendations: string[];
+// Blacksmith message types
+export interface BlacksmithMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  trigger?: string;
+  tool_uses?: { tool: string; input: string; output: string }[];
+  decomposition_result?: boolean;
+}
+
+export type BlacksmithStatus = 'idle' | 'thinking' | 'decomposing';
+
+export interface BlacksmithEvent {
+  type: 'text' | 'tool_use' | 'done' | 'error';
+  content?: string;
+  tool?: string;
+  error?: string;
 }
 
 // For React Flow graph nodes
@@ -150,11 +174,13 @@ export type SSEEvent =
   | { type: 'log:error'; message: string; timestamp: string }
   | { type: 'log:complete'; status: string; exitCode?: number }
   | { type: 'log:history'; message: string }
-  | { type: 'verification'; result: VerificationResult }
   | { type: 'connected'; clientId: string }
-  | { type: 'project:created'; project: Project; rootNode: TreeNode }
-  | { type: 'contract:created'; contract: Contract }
-  | { type: 'contract:updated'; contract: Contract };
+  | { type: 'project:created'; project: Project }
+  | { type: 'project:updated'; project: Project }
+  | { type: 'blacksmith:text'; content: string }
+  | { type: 'blacksmith:tool_use'; tool: string }
+  | { type: 'blacksmith:done' }
+  | { type: 'blacksmith:error'; error: string };
 
 export interface LogEntry {
   id: string;
