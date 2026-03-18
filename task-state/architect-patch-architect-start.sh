@@ -18,7 +18,7 @@ SESSION_MGR="$WORKSPACE/node_modules/kingdom-session-manager/session-manager.js"
 LEGACY_BRIDGE="$WORKSPACE/nats-bridge.js"
 
 # Build NATS URL with credentials (session-manager uses raw nats, not kingdom-raven)
-_SM_NATS_URL="nats://${NATS_USER:-kingdom}:${NATS_PASSWORD}@${VM1_IP:-129.80.40.0}:4222"
+_SM_NATS_URL="nats://${NATS_USER}:${NATS_PASSWORD}@${VM1_IP}:4222"
 
 start_process() {
   if [ -f "$SESSION_MGR" ]; then
